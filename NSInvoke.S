@@ -81,7 +81,7 @@ Ldone:
   pop %ebp
   ret
 
-#else // Now the x86-64 version
+#elif defined(__x86_64__)
 
   .cfi_startproc
   .cfi_personality 155, ___objc_personality_v0
@@ -154,6 +154,9 @@ Ldone:
   // .cfi_def_cfa rsp, 8
   ret
   .cfi_endproc
+
+#else
+#error "Missing NSInvoke assembly implementation for arch"
 #endif
 
 

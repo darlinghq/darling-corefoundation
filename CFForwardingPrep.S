@@ -245,7 +245,7 @@ __CF_forwarding_prep_1:
     // now, load the return value from the on-stack storage
     // and jump back to our caller
 
-    // here's how we get the return values (see NSInvoke-x86.S)
+    // here's how we get the return values (see NSInvoke.S)
     movq   0xc0(%rsp), %rax
     movq   0xc8(%rsp), %rdx
     movapd 0xd0(%rsp), %xmm0

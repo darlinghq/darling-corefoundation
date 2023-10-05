@@ -137,7 +137,7 @@ set(cf_sources
 	NSCharacterSet.m
 	NSInputStream.m
 	NSInvocation.m
-	NSInvoke-x86.S
+	NSInvoke.S
 	NSLocale.m
 	NSMessageBuilder.m
 	NSMethodSignature.m
