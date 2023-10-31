@@ -44,13 +44,14 @@ extern void __CFStringAppendBytes(CFMutableStringRef, const char *, CFIndex, CFS
     const char *nextType = types;
 
 #ifdef __LP64__
+    unsigned short usedGPRegisters = 0;
+    unsigned short usedFPRegisters = 0;
+
     // On x86-64, the first few arguments are passed in registers as long as
     // they satisfy certain conditions. __CF_forwarding_prep and __invoke__
     // pack and unpack all register values into a 0xe0-sized block preceeding
     // the actual stack frame contents. This means frameLength always starts
     // at 0xe0 and grows from there if there are any on-stack arguments.
-    unsigned short usedGPRegisters = 0;
-    unsigned short usedSSERegisters = 0;
     _frameLength = 0xe0;
 #endif
 
@@ -158,12 +159,12 @@ extern void __CFStringAppendBytes(CFMutableStringRef, const char *, CFIndex, CFS
             BOOL isFP = currentType[0] == _C_FLT || currentType[0] == _C_DBL;
             if (isFP) {
                 unsigned short registersNeeded = ALIGN_TO(frameSize, 16) / 16;
-                if (usedSSERegisters + registersNeeded > 8) {
+                if (usedFPRegisters + registersNeeded > 8) {
                     _types[_count].offset = _frameLength;
                     _frameLength += frameSize;
                 } else {
-                    _types[_count].offset = 0x30 + usedSSERegisters * 16;
-                    usedSSERegisters += registersNeeded;
+                    _types[_count].offset = 0x30 + usedFPRegisters * 16;
+                    usedFPRegisters += registersNeeded;
                 }
             } else {
                 unsigned short registersNeeded = ALIGN_TO(frameSize, 8) / 8;
