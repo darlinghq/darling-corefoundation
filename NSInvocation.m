@@ -111,7 +111,15 @@
         if ([sig _stret])
         {
             // Set up the return value pointer for the objc_msgSend_stret call.
-            void **ret = _frame;
+            void **ret;
+
+#if defined(__x86_64__) || defined(__i386__)
+            // x86_64 (and i386?) have the return struct pointer stored as the first argument.
+            ret = _frame;
+#else
+#error "Missing code to assign struct return pointer"
+#endif
+
             *ret = _retdata;
         }
     }

@@ -139,11 +139,20 @@ extern void __CFStringAppendBytes(CFMutableStringRef, const char *, CFIndex, CFS
                     if (frameSize > sizeof(int))
                     {
                         // Account for the stret return pointer.
-                        _frameLength += sizeof(void *);
                         _stret = YES;
-#if __LP64__
+
+                        // Note: The reason why we don't update the offset is because 
+                        // "_initWithMethodSignature:" is hardcoded to store the struct
+                        // return pointer at the proper location
+#if defined(__x86_64__) || defined(__i386__)
+                        // does this only apply for i386?
+                        _frameLength += sizeof(void *);
+#if defined(__x86_64__)
                         // on x86_64, the first GP register (rdi) is used to pass the stret pointer
                         ++usedGPRegisters;
+#endif
+#else
+#error "Missing code to handle struct return pointer"
 #endif
                     }
                     break;
