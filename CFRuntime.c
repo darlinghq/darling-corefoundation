@@ -1163,14 +1163,19 @@ void __CFInitialize(void) {
 
         __CFProphylacticAutofsAccess = false;
 
+        id (*objc_msgSend_alloc)(Class class, SEL selector) = (id (*)(Class,SEL))&objc_msgSend;
+        id (*objc_msgSend_init)(id object, SEL selector) = (id (*)(id,SEL))&objc_msgSend;
+
         Class clsDict, clsArray;
         SEL selAlloc, selInit;
+
         clsDict = objc_lookUpClass("NSDictionary");
         clsArray = objc_lookUpClass("NSArray");
         selAlloc = sel_registerName("alloc");
         selInit = sel_registerName("init");
-        __NSDictionary0__ = objc_msgSend(objc_msgSend(clsDict, selAlloc), selInit);
-        __NSArray0__ = objc_msgSend(objc_msgSend(clsArray, selAlloc), selInit);
+
+        __NSDictionary0__ = objc_msgSend_init(objc_msgSend_alloc(clsDict, selAlloc), selInit);
+        __NSArray0__ = objc_msgSend_init(objc_msgSend_alloc(clsArray, selAlloc), selInit);
 
         __CFInitializing = 0;
         __CFInitialized = 1;
