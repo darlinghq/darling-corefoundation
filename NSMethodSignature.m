@@ -57,6 +57,35 @@ extern void __CFStringAppendBytes(CFMutableStringRef, const char *, CFIndex, CFS
     // the actual stack frame contents. This means frameLength always starts
     // at 0xe0 and grows from there if there are any on-stack arguments.
     _frameLength = 0xe0;
+#elif defined(__arm64__)
+#define REGS_GP_ARGS_LIMIT 8
+#define REGS_FP_ARGS_START_POS 0x48
+
+    //  regs
+    // ┌────┐ [-- GP --]
+    // ├ x0 ┤ <-- 0
+    // ├ x1 ┤ <-- 8
+    // ├ x2 ┤ <-- 16
+    // ├ x3 ┤ <-- 24
+    // ├ x4 ┤ <-- 32
+    // ├ x5 ┤ <-- 40
+    // ├ x6 ┤ <-- 48
+    // ├ x7 ┤ <-- 56
+    // ├ x8 ┤ <-- 64
+    // ├────┤ [-- FP --]
+    // ├ v0 ┤ <-- 72
+    // ├ v1 ┤ <-- 88
+    // ├ v2 ┤ <-- 104
+    // ├ v3 ┤ <-- 120
+    // ├ v4 ┤ <-- 136
+    // ├ v5 ┤ <-- 152
+    // ├ v6 ┤ <-- 168
+    // ├ v7 ┤ <-- 184
+    // ├────┤ [ -- stack --]
+    // ├????┤ <-- 200+??
+    // └────┘
+
+    _frameLength = 0xC8; // 200
 #endif
 #endif
 
@@ -151,6 +180,9 @@ extern void __CFStringAppendBytes(CFMutableStringRef, const char *, CFIndex, CFS
                         // on x86_64, the first GP register (rdi) is used to pass the stret pointer
                         ++usedGPRegisters;
 #endif
+#elif defined(__arm64__)
+                        // No changes needed, value is stored in x8 (which is not an 
+                        // argument)
 #else
 #error "Missing code to handle struct return pointer"
 #endif

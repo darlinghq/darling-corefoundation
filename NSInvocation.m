@@ -116,6 +116,9 @@
 #if defined(__x86_64__) || defined(__i386__)
             // x86_64 (and i386?) have the return struct pointer stored as the first argument.
             ret = _frame;
+#elif defined(__arm64__)
+            // ARM64 ABI store the return struct in x8
+            ret = _frame + 64; // x8
 #else
 #error "Missing code to assign struct return pointer"
 #endif

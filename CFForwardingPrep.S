@@ -323,6 +323,104 @@ __CF_forwarding_prep_b:
 
     .cfi_endproc
 
+#elif __arm64__
+
+.section __TEXT,__text,regular,pure_instructions
+.globl __CF_forwarding_prep_0
+.globl __CF_forwarding_prep_1
+
+__CF_forwarding_prep_0:
+__CF_forwarding_prep_1:
+    stp fp, lr, [sp], #-32
+    mov fp, sp
+
+    ; See NSMethodSignature.m to better understand the layout of the args struct
+    sub sp, sp, 0x120           ; Reserve 0xC8 (args) + 0x50 (RET_SIZE_ARGS) + 0x2 (16 padding) = 0x120
+    stp x0, x1, [sp, #0]
+    stp x2, x3, [sp, #16]
+    stp x4, x5, [sp, #32]
+    stp x6, x7, [sp, #48]
+    str x8, [sp, #64]
+    add x9, sp, 0x48             ; work around for `st1` only supporting post-index
+    st1 {v0.16b}, [x9], #16     ; #72
+    st1 {v1.16b}, [x9], #16     ; #88
+    st1 {v2.16b}, [x9], #16     ; #104
+    st1 {v3.16b}, [x9], #16     ; #120
+    st1 {v4.16b}, [x9], #16     ; #136
+    st1 {v5.16b}, [x9], #16     ; #152
+    st1 {v6.16b}, [x9], #16     ; #168
+    st1 {v7.16b}, [x9], #16     ; #184
+
+    ; id ___forwarding___(struct objc_sendv_margs *args, void *returnStorage)
+    mov x0, sp          ; args = sp;
+    add x1, sp, 0xC8    ; returnStorage = sp + offset to return struct
+    bl ____forwarding___
+
+    cbz x0, Lforwarding_failing ; if (return_id != null)
+    
+    ; Assign the return values (see NSInvoke.S)
+    ldr x0, [sp, #200]
+    ldr x1, [sp, #208]
+    add x9, sp, 0xC8             ; work around for `st1` only supporting post-index
+    ld1 {v0.16b}, [x9], #16
+    b Lfinal
+
+Lforwarding_failing:
+    ; if we got a non-nil value, it's our forwarding target (therefore, we don't restore x0)
+    ldr x1, [sp, #8]
+    ldp x2, x3, [sp, #16]
+    ldp x4, x5, [sp, #32]
+    ldp x6, x7, [sp, #48]
+    ldr x8, [sp, #64]
+    add x9, sp, 0x48            ; work around for `st1` only supporting post-index
+    ld1 {v0.16b}, [x9], #16     ; #72
+    ld1 {v1.16b}, [x9], #16     ; #88
+    ld1 {v2.16b}, [x9], #16     ; #104
+    ld1 {v3.16b}, [x9], #16     ; #120
+    ld1 {v4.16b}, [x9], #16     ; #136
+    ld1 {v5.16b}, [x9], #16     ; #152
+    ld1 {v6.16b}, [x9], #16     ; #168
+    ld1 {v7.16b}, [x9], #16     ; #184
+
+    ; restart message send
+    bl _objc_msgSend
+Lfinal:
+    add sp, sp, 0x120       ; Restore reserved args + RET_SIZE_ARGS space from stack
+    ldp fp, lr, [sp], #32
+    ret
+
+
+.globl __CF_forwarding_prep_b
+
+__CF_forwarding_prep_b:
+    stp fp, lr, [sp], #-32
+    mov fp, sp
+
+    ; See NSMethodSignature.m to better understand the layout of the args struct
+    sub sp, sp, 0x120           ; Reserve 0xC8 (args) + 0x50 (RET_SIZE_ARGS) + 0x2 (16 padding) = 0x120
+    stp x0, x1, [sp, #0]
+    stp x2, x3, [sp, #16]
+    stp x4, x5, [sp, #32]
+    stp x6, x7, [sp, #48]
+    str x8, [sp, #64]
+    add x9, sp, 0x48             ; work around for `st1` only supporting post-index
+    st1 {v0.16b}, [x9], #16     ; #72
+    st1 {v1.16b}, [x9], #16     ; #88
+    st1 {v2.16b}, [x9], #16     ; #104
+    st1 {v3.16b}, [x9], #16     ; #120
+    st1 {v4.16b}, [x9], #16     ; #136
+    st1 {v5.16b}, [x9], #16     ; #152
+    st1 {v6.16b}, [x9], #16     ; #168
+    st1 {v7.16b}, [x9], #16     ; #184
+
+    ; __block_forwarding__(void* frame)
+    mov x0, sp
+    bl ___block_forwarding__
+
+    add sp, sp, 0x120       ; Restore reserved args + RET_SIZE_ARGS space from stack
+    ldp fp, lr, [sp], #32
+    ret
+
 #else
 #error Missing forwarding prep handlers for this arch https://code.google.com/p/apportable/issues/detail?id=619
 #endif
