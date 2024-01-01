@@ -328,7 +328,7 @@ __CF_forwarding_prep_b:
 .section __TEXT,__text,regular,pure_instructions
 .globl __CF_forwarding_prep_0
 .globl __CF_forwarding_prep_1
-
+.balign 4
 __CF_forwarding_prep_0:
 __CF_forwarding_prep_1:
     stp fp, lr, [sp], #-32
