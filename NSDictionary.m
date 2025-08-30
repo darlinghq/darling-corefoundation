@@ -970,6 +970,20 @@ static NSString *_getDescription(id obj, id locale, int level)
     return [objs autorelease];
 }
 
+- (BOOL)writeToURL:(NSURL*)url error:(NSError**)error {
+    NSData* data = [NSPropertyListSerialization dataWithPropertyList:self 
+                                                              format:NSPropertyListXMLFormat_v1_0
+                                                             options:0 
+                                                               error:error];
+    if (data == nil) {
+        return NO;
+    }
+
+    return [data writeToURL:url 
+                    options:NSDataWritingAtomic
+                      error:error];
+}
+
 - (BOOL)writeToFile:(NSString *)path atomically:(BOOL)atomically
 {
     NSData *data = (NSData *)_CFPropertyListCreateXMLData(kCFAllocatorDefault, (CFPropertyListRef)self, true);
