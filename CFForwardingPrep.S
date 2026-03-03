@@ -323,6 +323,100 @@ __CF_forwarding_prep_b:
 
     .cfi_endproc
 
+#elif defined(__arm64__) || defined(__aarch64__)
+
+.section __TEXT,__text,regular,pure_instructions
+.globl __CF_forwarding_prep_0
+.globl __CF_forwarding_prep_1
+.p2align 2
+
+__CF_forwarding_prep_0:
+__CF_forwarding_prep_1:
+    // Save frame and link register
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+
+    // Allocate space for register save area (128) + return value (32)
+    sub sp, sp, #160
+
+    // Save integer register arguments at sp+0
+    stp x0, x1, [sp, #0]
+    stp x2, x3, [sp, #16]
+    stp x4, x5, [sp, #32]
+    stp x6, x7, [sp, #48]
+
+    // Save floating-point register arguments at sp+64
+    stp d0, d1, [sp, #64]
+    stp d2, d3, [sp, #80]
+    stp d4, d5, [sp, #96]
+    stp d6, d7, [sp, #112]
+
+    // Call ____forwarding___(marg_list, return_stret_addr)
+    mov x0, sp             // marg_list
+    add x1, sp, #128       // return value storage
+    bl  ____forwarding___
+
+    cbnz x0, Lfail_arm64   // non-nil means we have a forwarding target
+
+    // Load return values from on-stack storage
+    ldr x0, [sp, #128]
+    ldr d0, [sp, #128]
+
+    mov sp, x29
+    ldp x29, x30, [sp], #16
+    ret
+
+Lfail_arm64:
+    // x0 is the forwarding target (new self)
+    // Restore all other args and restart message send
+    mov x9, x0             // save forwarding target
+
+    ldp d0, d1, [sp, #64]
+    ldp d2, d3, [sp, #80]
+    ldp d4, d5, [sp, #96]
+    ldp d6, d7, [sp, #112]
+
+    // Restore integer args (x0 = new target, skip original x0)
+    ldr x1, [sp, #8]
+    ldp x2, x3, [sp, #16]
+    ldp x4, x5, [sp, #32]
+    ldp x6, x7, [sp, #48]
+
+    mov x0, x9             // new self
+
+    mov sp, x29
+    ldp x29, x30, [sp], #16
+
+    b   _objc_msgSend      // restart message send with new target
+
+.globl __CF_forwarding_prep_b
+.p2align 2
+
+__CF_forwarding_prep_b:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+
+    sub sp, sp, #128
+
+    // Save integer register arguments
+    stp x0, x1, [sp, #0]
+    stp x2, x3, [sp, #16]
+    stp x4, x5, [sp, #32]
+    stp x6, x7, [sp, #48]
+
+    // Save floating-point register arguments
+    stp d0, d1, [sp, #64]
+    stp d2, d3, [sp, #80]
+    stp d4, d5, [sp, #96]
+    stp d6, d7, [sp, #112]
+
+    mov x0, sp
+    bl  ___block_forwarding__
+
+    mov sp, x29
+    ldp x29, x30, [sp], #16
+    ret
+
 #else
-#error Missing forwarding prep handlers for this arch https://code.google.com/p/apportable/issues/detail?id=619
+#error Missing forwarding prep handlers for this arch
 #endif
