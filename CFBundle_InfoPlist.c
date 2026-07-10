@@ -444,30 +444,26 @@ CF_PRIVATE CFDictionaryRef _CFBundleCopyInfoDictionaryInDirectoryWithVersion(CFA
 
     // We're going to search for two files here - Info.plist and Info-macos.plist (platform specific). The platform-specific one takes precedence.
     // First, construct the URL to the directory we'll search by using the passed in URL as a base
-    CFStringRef platformInfoURLFromBase = _CFBundlePlatformInfoURLFromBase0;
-    CFStringRef infoURLFromBase = _CFBundleInfoURLFromBase0;
     CFURLRef directoryURL = NULL;
     
     if (0 == version) {
-        directoryURL = CFURLCreateWithString(kCFAllocatorSystemDefault, _CFBundleResourcesURLFromBase0, url);
-        platformInfoURLFromBase = _CFBundlePlatformInfoURLFromBase0;
-        infoURLFromBase = _CFBundleInfoURLFromBase0;
+        directoryURL = CFURLCreateCopyAppendingPathComponent(
+            kCFAllocatorSystemDefault, url, _CFBundleResourcesDirectoryName,
+            true);
     } else if (1 == version) {
-        directoryURL = CFURLCreateWithString(kCFAllocatorSystemDefault, _CFBundleSupportFilesURLFromBase1, url);
-        platformInfoURLFromBase = _CFBundlePlatformInfoURLFromBase1;
-        infoURLFromBase = _CFBundleInfoURLFromBase1;
+        directoryURL = CFURLCreateCopyAppendingPathComponent(
+            kCFAllocatorSystemDefault, url, _CFBundleSupportFilesDirectoryName1,
+            true);
     } else if (2 == version) {
-        directoryURL = CFURLCreateWithString(kCFAllocatorSystemDefault, _CFBundleSupportFilesURLFromBase2, url);
-        platformInfoURLFromBase = _CFBundlePlatformInfoURLFromBase2;
-        infoURLFromBase = _CFBundleInfoURLFromBase2;
+        directoryURL = CFURLCreateCopyAppendingPathComponent(
+            kCFAllocatorSystemDefault, url, _CFBundleSupportFilesDirectoryName2,
+            true);
     } else if (3 == version) {
         CFStringRef path = CFURLCopyFileSystemPath(url, kCFURLPOSIXPathStyle);
         // this test is necessary to exclude the case where a bundle is spuriously created from the innards of another bundle
         if (path) {
             if (!(CFStringHasSuffix(path, _CFBundleSupportFilesDirectoryName1) || CFStringHasSuffix(path, _CFBundleSupportFilesDirectoryName2) || CFStringHasSuffix(path, _CFBundleResourcesDirectoryName))) {
                 directoryURL = (CFURLRef)CFRetain(url);
-                platformInfoURLFromBase = _CFBundlePlatformInfoURLFromBase3;
-                infoURLFromBase = _CFBundleInfoURLFromBase3;
             }
             CFRelease(path);
         }
@@ -487,18 +483,20 @@ CF_PRIVATE CFDictionaryRef _CFBundleCopyInfoDictionaryInDirectoryWithVersion(CFA
         
         // Look inside this directory for the platform-specific and global Info.plist
         // For compatability reasons, we support case-insensitive versions of Info.plist. That means that we must do a search of all the file names in the directory so we can compare. Otherwise, perhaps a couple of stats would be more efficient than the readdir.
-        _CFIterateDirectory(directoryPath, ^Boolean(CFStringRef fileName, uint8_t fileType) {            
+        _CFIterateDirectory(directoryPath, ^Boolean(CFStringRef fileName, uint8_t fileType) {
             // Only do the platform check on platforms where the string is different than the normal one
             if (_CFBundlePlatformInfoPlistName != _CFBundleInfoPlistName) {
                 if (!platformInfoPlistURL && CFStringGetLength(fileName) == platformInfoPlistLength && CFStringCompareWithOptions(fileName, _CFBundlePlatformInfoPlistName, CFRangeMake(0, platformInfoPlistLength), kCFCompareCaseInsensitive | kCFCompareAnchored) == kCFCompareEqualTo) {
                     // Make a URL out of this file
-                    platformInfoPlistURL = CFURLCreateWithString(kCFAllocatorSystemDefault, platformInfoURLFromBase, url);
+                    platformInfoPlistURL = CFURLCreateCopyAppendingPathComponent(
+                        kCFAllocatorSystemDefault, directoryURL, fileName, false);
                 }
             }
             
             if (!infoPlistURL && CFStringGetLength(fileName) == infoPlistLength && CFStringCompareWithOptions(fileName, _CFBundleInfoPlistName, CFRangeMake(0, infoPlistLength), kCFCompareCaseInsensitive | kCFCompareAnchored) == kCFCompareEqualTo) {
                 // Make a URL out of this file
-                infoPlistURL = CFURLCreateWithString(kCFAllocatorSystemDefault, infoURLFromBase, url);
+                infoPlistURL = CFURLCreateCopyAppendingPathComponent(
+                    kCFAllocatorSystemDefault, directoryURL, fileName, false);
             }
             
             // If by some chance we have both URLs, just bail early (or just the infoPlistURL on platforms that have no platform-specific name)
