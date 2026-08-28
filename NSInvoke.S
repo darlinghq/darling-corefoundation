@@ -81,7 +81,7 @@ Ldone:
   pop %ebp
   ret
 
-#else // Now the x86-64 version
+#elif defined(__x86_64__)
 
   .cfi_startproc
   .cfi_personality 155, ___objc_personality_v0
@@ -154,6 +154,124 @@ Ldone:
   // .cfi_def_cfa rsp, 8
   ret
   .cfi_endproc
+
+#elif __arm64__
+; typedef void* marg_list;
+; void __invoke__(
+;     void (*msgSend)(...),    // x0 
+;     void *retdata,           // x1
+;     marg_list args,          // x2
+;     size_t frame_length,     // x3
+;     const char *return_type  // x4
+; )
+
+; Prologue
+  stp   fp, lr, [sp, #-16]
+  mov   fp, sp
+
+; ┌──── stack ───┐
+; ├ msgSend      ┤ <-- fp
+; ├ retdata      ┤ <-- fp+8
+; ├ args         ┤ <-- fp+16
+; ├ frame_length ┤ <-- fp+24
+; ├ return_type  ┤ <-- fp+32
+; ├ sp_offset    ┤ <-- fp+40
+; └──────────────┘
+
+; Push all arguments to stack
+  stp   x0, x1, [sp, #-16]!
+  stp   x2, x3, [sp, #-32]!
+  str   x4, [sp, #16]
+
+; Copy args into registers
+;   To better understand how the values in `args` is structured, it's
+;   recommended to look at Darling's implementation of NSMethodSignature.
+;
+;  regs
+; ┌────┐ [-- GP --]
+; ├ x0 ┤ <-- 0
+; ├ x1 ┤ <-- 8
+; ├ x2 ┤ <-- 16
+; ├ x3 ┤ <-- 24
+; ├ x4 ┤ <-- 32
+; ├ x5 ┤ <-- 40
+; ├ x6 ┤ <-- 48
+; ├ x7 ┤ <-- 56
+; ├ x8 ┤ <-- 64
+; ├────┤ [-- FP --]
+; ├ v0 ┤ <-- 72
+; ├ v1 ┤ <-- 88
+; ├ v2 ┤ <-- 104
+; ├ v3 ┤ <-- 120
+; ├ v4 ┤ <-- 136
+; ├ v5 ┤ <-- 152
+; ├ v6 ┤ <-- 168
+; ├ v7 ┤ <-- 184
+; ├────┤ [ -- stack --]
+; ├????┤ <-- 200+??
+; └────┘
+#define ARGS_STACK_OFFSET 200
+
+; Copy GP registers
+  ldr x9, [fp, #16]      ; x9 = args
+  ldp x0, x1, [x9], #16
+  ldp x2, x3, [x9], #16
+  ldp x4, x5, [x9], #16
+  ldp x6, x7, [x9], #16
+  ldr x8, [fp], #8
+; Copy FP regsiters
+  ld1 {v0.16b}, [x9], #16
+  ld1 {v1.16b}, [x9], #16
+  ld1 {v2.16b}, [x9], #16
+  ld1 {v3.16b}, [x9], #16
+  ld1 {v4.16b}, [x9], #16
+  ld1 {v5.16b}, [x9], #16
+  ld1 {v6.16b}, [x9], #16
+  ld1 {v7.16b}, [x9], #16
+
+; Copy (stack) args to stack (TODO: Optimize code)
+  ldp x9, x11, [fp, #16]          ; x9 = args; x11 = frame_length
+  add x9, x9, #ARGS_STACK_OFFSET  ; const void* input_array = args + register_offset
+  mov x10, sp                     ; void* output_array = sp
+  sub x11, x3, #ARGS_STACK_OFFSET ; counter = frame_length - register_offset
+
+one_byte_copy:
+  ldrb    w12, [x9], #1   ; char temp = *(input_array++);
+  subs    x11, x11, #1    ; counter--;
+  strb    w12, [x10], #1  ; *(output_array++) = temp;
+  b.ne    one_byte_copy
+
+  ; Align the stack and store the offset 
+  and x10, x10, #-16  ; output_array &= -16
+  sub x11, sp, x10    ; sp_offset = sp - output_array
+  str x11, [fp, #40]
+  ; Update SP
+  mov sp, x10         ; sp = output_array
+
+; Call objc_msgSend
+  ldr x9, [fp]
+  blr x9
+
+; Store return values
+  ldr x9, [fp, #8]      ; x9 = retdata
+; Store GP return values
+  str x0, [x9], #8
+  str x1, [x9], #8
+; Store FP return values
+  st1 {v0.16b}, [x9], #16
+
+; Remove stack allocation of args
+  ldr x10, [fp, #16]    ; x10 = sp_offset
+  add sp, sp, x10
+; Restore atack allocation of arguments
+  add sp, sp, #48
+
+; Epilogue
+  ldp   fp, lr, [sp, #16]
+  ret
+
+#else
+#error "Missing NSInvoke assembly implementation for arch"
 #endif
 
 

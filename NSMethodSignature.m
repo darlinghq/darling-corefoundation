@@ -44,14 +44,49 @@ extern void __CFStringAppendBytes(CFMutableStringRef, const char *, CFIndex, CFS
     const char *nextType = types;
 
 #ifdef __LP64__
+    unsigned short usedGPRegisters = 0;
+    unsigned short usedFPRegisters = 0;
+
+#if defined(__x86_64__)
+#define REGS_GP_ARGS_LIMIT 6
+#define REGS_FP_ARGS_START_POS 0x30
+
     // On x86-64, the first few arguments are passed in registers as long as
     // they satisfy certain conditions. __CF_forwarding_prep and __invoke__
     // pack and unpack all register values into a 0xe0-sized block preceeding
     // the actual stack frame contents. This means frameLength always starts
     // at 0xe0 and grows from there if there are any on-stack arguments.
-    unsigned short usedGPRegisters = 0;
-    unsigned short usedSSERegisters = 0;
     _frameLength = 0xe0;
+#elif defined(__arm64__)
+#define REGS_GP_ARGS_LIMIT 8
+#define REGS_FP_ARGS_START_POS 0x48
+
+    //  regs
+    // ┌────┐ [-- GP --]
+    // ├ x0 ┤ <-- 0
+    // ├ x1 ┤ <-- 8
+    // ├ x2 ┤ <-- 16
+    // ├ x3 ┤ <-- 24
+    // ├ x4 ┤ <-- 32
+    // ├ x5 ┤ <-- 40
+    // ├ x6 ┤ <-- 48
+    // ├ x7 ┤ <-- 56
+    // ├ x8 ┤ <-- 64
+    // ├────┤ [-- FP --]
+    // ├ v0 ┤ <-- 72
+    // ├ v1 ┤ <-- 88
+    // ├ v2 ┤ <-- 104
+    // ├ v3 ┤ <-- 120
+    // ├ v4 ┤ <-- 136
+    // ├ v5 ┤ <-- 152
+    // ├ v6 ┤ <-- 168
+    // ├ v7 ┤ <-- 184
+    // ├────┤ [ -- stack --]
+    // ├????┤ <-- 200+??
+    // └────┘
+
+    _frameLength = 0xC8; // 200
+#endif
 #endif
 
     while (nextType[0])
@@ -133,11 +168,23 @@ extern void __CFStringAppendBytes(CFMutableStringRef, const char *, CFIndex, CFS
                     if (frameSize > sizeof(int))
                     {
                         // Account for the stret return pointer.
-                        _frameLength += sizeof(void *);
                         _stret = YES;
-#if __LP64__
+
+                        // Note: The reason why we don't update the offset is because 
+                        // "_initWithMethodSignature:" is hardcoded to store the struct
+                        // return pointer at the proper location
+#if defined(__x86_64__) || defined(__i386__)
+                        // does this only apply for i386?
+                        _frameLength += sizeof(void *);
+#if defined(__x86_64__)
                         // on x86_64, the first GP register (rdi) is used to pass the stret pointer
                         ++usedGPRegisters;
+#endif
+#elif defined(__arm64__)
+                        // No changes needed, value is stored in x8 (which is not an 
+                        // argument)
+#else
+#error "Missing code to handle struct return pointer"
 #endif
                     }
                     break;
@@ -158,16 +205,16 @@ extern void __CFStringAppendBytes(CFMutableStringRef, const char *, CFIndex, CFS
             BOOL isFP = currentType[0] == _C_FLT || currentType[0] == _C_DBL;
             if (isFP) {
                 unsigned short registersNeeded = ALIGN_TO(frameSize, 16) / 16;
-                if (usedSSERegisters + registersNeeded > 8) {
+                if (usedFPRegisters + registersNeeded > 8) {
                     _types[_count].offset = _frameLength;
                     _frameLength += frameSize;
                 } else {
-                    _types[_count].offset = 0x30 + usedSSERegisters * 16;
-                    usedSSERegisters += registersNeeded;
+                    _types[_count].offset = REGS_FP_ARGS_START_POS + usedFPRegisters * 16;
+                    usedFPRegisters += registersNeeded;
                 }
             } else {
                 unsigned short registersNeeded = ALIGN_TO(frameSize, 8) / 8;
-                if (usedGPRegisters + registersNeeded > 6 || frameSize > 16) {
+                if (usedGPRegisters + registersNeeded > REGS_GP_ARGS_LIMIT || frameSize > 16) {
                     _types[_count].offset = _frameLength;
                     _frameLength += frameSize;
                 } else {

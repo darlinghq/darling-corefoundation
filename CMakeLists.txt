@@ -137,7 +137,7 @@ set(cf_sources
 	NSCharacterSet.m
 	NSInputStream.m
 	NSInvocation.m
-	NSInvoke-x86.S
+	NSInvoke.S
 	NSLocale.m
 	NSMessageBuilder.m
 	NSMethodSignature.m
@@ -205,6 +205,10 @@ set_property(TARGET CoreFoundation_x86_64 APPEND_STRING PROPERTY
   LINK_FLAGS " -Wl,-reexported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/reexport_x86_64.exp \
 	-Wl,-alias,_OBJC_CLASS_\\$___NSCFConstantString,___CFConstantStringClassReference")
 endif (TARGET_x86_64)
+if (TARGET_ARM64)
+set_property(TARGET CoreFoundation_arm64 APPEND_STRING PROPERTY
+  LINK_FLAGS " -Wl,-alias,_OBJC_CLASS_\\$___NSCFConstantString,___CFConstantStringClassReference")
+endif (TARGET_ARM64)
 
 set_source_files_properties(${cf_c_sources} PROPERTIES COMPILE_FLAGS "-x objective-c")
 
