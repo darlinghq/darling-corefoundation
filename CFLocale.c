@@ -1077,7 +1077,7 @@ static bool __CFLocaleCopyUsesMetric(CFLocaleRef locale, bool user, CFTypeRef *c
     bool us = false;    // Default is Metric
     bool done = false;
 #if DEPLOYMENT_TARGET_MACOSX || DEPLOYMENT_TARGET_EMBEDDED
-    if (user) {
+    if (user && locale->_prefs) {
 	CFTypeRef pref = CFDictionaryGetValue(locale->_prefs, CFSTR("AppleMetricUnits"));
 	if (pref) {
 	    us = (kCFBooleanFalse == pref);
