@@ -492,9 +492,11 @@ CF_PRIVATE void __CFGenericValidateType_(CFTypeRef cf, CFTypeID type, const char
 #include <objc/message.h>
 
 #define CFTYPE_IS_OBJC(obj) (!_CFIsCFObject(obj))
-#define CFTYPE_OBJC_FUNCDISPATCH(obj, sel) if (CFTYPE_IS_OBJC(obj)) { ((void (*)(CFTypeRef, SEL, ...))objc_msgSend)(obj, sel_getUid(#sel)); return; }
-#define CFTYPE_OBJC_FUNCDISPATCH0(rettype, obj, sel) if (CFTYPE_IS_OBJC(obj)) return ((rettype (*)(CFTypeRef, SEL, ...))objc_msgSend)(obj, sel_getUid(#sel))
-#define CFTYPE_OBJC_FUNCDISPATCH1(rettype, obj, sel, a1) if (CFTYPE_IS_OBJC(obj)) return ((rettype (*)(CFTypeRef, SEL, ...))objc_msgSend)(obj, sel_getUid(#sel), a1)
+// objc_msgSend must be called through the method's real (non-variadic) prototype: on arm64 Darwin,
+// variadic arguments are passed on the stack, so the callee would read garbage from its registers.
+#define CFTYPE_OBJC_FUNCDISPATCH(obj, sel) if (CFTYPE_IS_OBJC(obj)) { ((void (*)(CFTypeRef, SEL))objc_msgSend)(obj, sel_getUid(#sel)); return; }
+#define CFTYPE_OBJC_FUNCDISPATCH0(rettype, obj, sel) if (CFTYPE_IS_OBJC(obj)) return ((rettype (*)(CFTypeRef, SEL))objc_msgSend)(obj, sel_getUid(#sel))
+#define CFTYPE_OBJC_FUNCDISPATCH1(rettype, obj, sel, a1) if (CFTYPE_IS_OBJC(obj)) return ((rettype (*)(CFTypeRef, SEL, CFTypeRef))objc_msgSend)(obj, sel_getUid(#sel), a1)
 
 
 CFTypeID CFGetTypeID(CFTypeRef cf) {
