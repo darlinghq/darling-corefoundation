@@ -1105,3 +1105,13 @@ CF_PRIVATE Boolean _CFReadMappedFromFile(CFStringRef path, Boolean map, Boolean 
     *outLength = length;
     return true;
 }
+
+CONST_STRING_DECL(kCFWebServicesTypeWebSearch, "WebSearch")
+CONST_STRING_DECL(kCFWebServicesProviderDefaultDisplayNameKey, "DefaultDisplayName")
+
+// Darling has no web service provider configuration, so no provider is known for any service
+// type; callers treat NULL as "no provider" (e.g. they hide or disable a web search menu item).
+CFDictionaryRef _CFWebServicesCopyProviderInfo(CFStringRef serviceType, void *reserved)
+{
+    return NULL;
+}
