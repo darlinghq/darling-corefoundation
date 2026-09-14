@@ -704,9 +704,15 @@ CF_PRIVATE void _CFLogSimple(int32_t lev, char *format, ...) {
 
 void CFLog(int32_t lev, CFStringRef format, ...) {
     va_list args;
-    va_start(args, format); 
+    va_start(args, format);
     _CFLogvEx2(NULL, NULL, NULL, NULL, lev, format, args);
     va_end(args);
+}
+
+// SPI used by Apple apps (e.g. Automator, TextEdit) for test/diagnostic logging. Callers pass
+// 0 and an already formatted message; log it at debug level so it stays out of normal output.
+void CFLogTest(int32_t unused, CFStringRef message) {
+    if (message) CFLog(kCFLogLevelDebug, CFSTR("%@"), message);
 }
 
 
