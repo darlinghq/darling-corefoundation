@@ -14,6 +14,7 @@
 #import "CFInternal.h"
 #import "CFPriv.h"
 #import "NSURLInternal.h"
+#import <CoreFoundation/CFFileSecurity.h>
 #import <objc/runtime.h>
 #include <sys/statvfs.h>
 #include <sys/stat.h>
@@ -510,7 +511,19 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
     }
     else if (CFEqual(key, kCFURLFileSecurityKey))
     {
-        
+        // Owner, group and permission bits; ACLs and UUIDs are not represented.
+        if (CFURLStat(url, &info))
+        {
+            CFFileSecurityRef security = CFFileSecurityCreate(kCFAllocatorDefault);
+            CFFileSecuritySetOwner(security, info.st_uid);
+            CFFileSecuritySetGroup(security, info.st_gid);
+            CFFileSecuritySetMode(security, info.st_mode & 07777);
+            value = security;
+        }
+        else
+        {
+            posixError(error);
+        }
     }
     else if (CFEqual(key, kCFURLIsExcludedFromBackupKey))
     {
@@ -941,7 +954,21 @@ static CFTypeRef CFURLSetPropertyForKey(CFURLRef url, CFStringRef key, CFTypeRef
     }
     else if (CFEqual(key, kCFURLFileSecurityKey))
     {
-        // not supported
+        // Apply the owner, group and permission bits that are set; ACLs and UUIDs are ignored.
+        UInt8 path[PATH_MAX] = { 0 };
+        CFFileSecurityRef security = (CFFileSecurityRef)value;
+        uid_t owner; gid_t group; mode_t mode;
+        Boolean hasOwner = CFFileSecurityGetOwner(security, &owner);
+        Boolean hasGroup = CFFileSecurityGetGroup(security, &group);
+        Boolean ok = CFURLGetFileSystemRepresentation(url, true, path, PATH_MAX);
+        if (ok && CFFileSecurityGetMode(security, &mode) && chmod((const char *)path, mode) != 0)
+            ok = false;
+        if (ok && (hasOwner || hasGroup) && chown((const char *)path, hasOwner ? owner : (uid_t)-1, hasGroup ? group : (gid_t)-1) != 0)
+            ok = false;
+        if (ok)
+            acceptedValue = CFRetain(value);
+        else
+            posixError(error);
     }
     else if (CFEqual(key, kCFURLIsExcludedFromBackupKey) && CFGetTypeID(value) == CFBooleanGetTypeID())
     {
