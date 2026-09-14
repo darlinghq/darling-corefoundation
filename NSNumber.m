@@ -24,6 +24,9 @@ CF_PRIVATE
 @interface __NSCFBoolean : __NSCFType
 @end
 
+// CFNumber.c private type; Foundation stores unsigned values above INT64_MAX with it.
+enum { kCFNumberSInt128Type = 17 };
+
 @implementation __NSCFNumber
 
 + (BOOL)automaticallyNotifiesObserversForKey:(NSString *)key
@@ -246,6 +249,8 @@ CF_PRIVATE
             return @encode(NSInteger);
         case kCFNumberCGFloatType:
             return @encode(float); // really is @encode(CGFloat)
+        case kCFNumberSInt128Type:
+            return @encode(unsigned long long);
         default:
             return "";
     }
@@ -254,6 +259,9 @@ CF_PRIVATE
 - (void)getValue:(void *)buffer
 {
     CFNumberType t = _CFNumberGetType2((CFNumberRef)self);
+    // objCType reports the 128-bit type as "Q", so callers pass an 8-byte buffer.
+    if (t == kCFNumberSInt128Type)
+        t = kCFNumberSInt64Type;
     CFNumberGetValue((CFNumberRef)self, t, buffer);
 }
 
