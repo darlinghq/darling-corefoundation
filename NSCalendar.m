@@ -10,6 +10,8 @@
 #import "NSCalendarInternal.h"
 #import "NSObjectInternal.h"
 
+NSString *const NSCalendarDayChangedNotification = @"NSCalendarDayChangedNotification";
+
 extern void CFCalendarSetGregorianStartDate(CFCalendarRef calendar, CFDateRef date);
 extern CFDateRef CFCalendarCopyGregorianStartDate(CFCalendarRef calendar);
 extern Boolean _CFCalendarDecomposeAbsoluteTimeV(CFCalendarRef calendar, CFAbsoluteTime at, const char *componentDesc, int **componentVector, int count);

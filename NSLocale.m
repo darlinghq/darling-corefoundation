@@ -65,6 +65,9 @@ NSString *const NSLocaleScriptCodeKey = @"kCFLocaleScriptCodeKey";
 NSString *const NSLocaleUsesMetricSystemKey = @"kCFLocaleUsesMetricSystemKey";
 NSString *const NSLocaleVariantCodeKey = @"kCFLocaleVariantCodeKey";
 
+NSString *const NSLocaleLanguageConfidenceHigh = @"NSLocaleLanguageConfidenceHigh";
+NSString *const NSLocaleLanguageConfidenceMedium = @"NSLocaleLanguageConfidenceMedium";
+
 @implementation NSLocale
 
 + (id)internetServicesRegion

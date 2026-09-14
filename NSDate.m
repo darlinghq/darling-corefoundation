@@ -8,6 +8,8 @@
 
 #import <Foundation/NSDate.h>
 #import "NSObjectInternal.h"
+
+NSString *const NSSystemClockDidChangeNotification = @"NSSystemClockDidChangeNotification";
 #import "ForFoundationOnly.h"
 #import <sys/time.h>
 
