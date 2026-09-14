@@ -62,6 +62,41 @@ unsigned __NSARM64DoubleHFACount(const char *type)
     }
     return 0;
 }
+
+// Apple's arm64 ABI extends integer arguments and results narrower than int to 32 bits
+// (callers extend register arguments, callees extend results), and code compiled for it
+// relies on that. value holds a value of the given type in the low bytes of a 4+ byte slot.
+void __NSARM64ExtendToInt(void *value, const char *type)
+{
+    switch (*stripQualifiersAndComments(type))
+    {
+        case _C_CHR:
+        {
+            int32_t extended = *(int8_t *)value;
+            memcpy(value, &extended, sizeof(extended));
+            break;
+        }
+        case _C_SHT:
+        {
+            int32_t extended = *(int16_t *)value;
+            memcpy(value, &extended, sizeof(extended));
+            break;
+        }
+        case _C_UCHR:
+        case _C_BOOL:
+        {
+            uint32_t extended = *(uint8_t *)value;
+            memcpy(value, &extended, sizeof(extended));
+            break;
+        }
+        case _C_USHT:
+        {
+            uint32_t extended = *(uint16_t *)value;
+            memcpy(value, &extended, sizeof(extended));
+            break;
+        }
+    }
+}
 #endif
 
 @implementation NSMethodSignature
@@ -181,6 +216,9 @@ unsigned __NSARM64DoubleHFACount(const char *type)
             // type of the return value.
             switch (*stripQualifiersAndComments(_types[0].type))
             {
+#if defined(__arm64__)
+                case _C_UNION_B:
+#endif
                 case _C_STRUCT_B:
                 {
 #if defined(__arm64__)
@@ -246,10 +284,14 @@ unsigned __NSARM64DoubleHFACount(const char *type)
             // FIXME: structs over 16 bytes (other than double aggregates) should be passed by reference.
             if (!inRegisters)
             {
-                // Apple's arm64 ABI packs stack arguments by their own size and alignment.
-                _frameLength = ALIGN_TO(_frameLength, ms->alignment);
+                // Apple's arm64 ABI packs scalar stack arguments by their own size and alignment,
+                // but aggregates still take 8-byte-aligned slots rounded up to 8 bytes.
+                BOOL isAggregate = argType[0] == _C_STRUCT_B || argType[0] == _C_UNION_B || argType[0] == _C_ARY_B;
+                NSUInteger stackAlignment = isAggregate ? MAX(ms->alignment, 8) : ms->alignment;
+                NSUInteger stackSize = isAggregate ? ALIGN_TO(ms->size, 8) : ms->size;
+                _frameLength = ALIGN_TO(_frameLength, stackAlignment);
                 _types[_count].offset = _frameLength;
-                _frameLength += ms->size;
+                _frameLength += stackSize;
             }
 #elif __LP64__
             // FIXME: This is far from being a complete implementation of

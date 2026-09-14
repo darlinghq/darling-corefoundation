@@ -257,6 +257,14 @@
 
     memcpy(arg, argumentLocation, argInfo->size);
 
+#if defined(__arm64__)
+    // Register slots (x0-x7 and d0-d7) are 8 bytes wide; stack slots of small types are packed.
+    if (idx > 0 && argInfo->offset < 0x80)
+    {
+        __NSARM64ExtendToInt(arg, argInfo->type);
+    }
+#endif
+
     if (_retainedArgs)
     {
         [self _retainArgument:idx];

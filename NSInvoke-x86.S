@@ -169,10 +169,20 @@ Ldone:
 //   bytes 64-127: d0-d7 floating-point register args (8 * 8 bytes)
 //   bytes 128+:   stack-passed arguments
 
+  // CFI lets exceptions raised by the invoked method unwind through this frame.
+  .cfi_startproc
   stp x29, x30, [sp, #-16]!
+  .cfi_def_cfa_offset 16
   mov x29, sp
-  stp x19, x20, [sp, #-16]!
-  stp x21, x22, [sp, #-16]!
+  .cfi_def_cfa w29, 16
+  .cfi_offset w30, -8
+  .cfi_offset w29, -16
+  stp x20, x19, [sp, #-16]!
+  stp x22, x21, [sp, #-16]!
+  .cfi_offset w19, -24
+  .cfi_offset w20, -32
+  .cfi_offset w21, -40
+  .cfi_offset w22, -48
 
   mov x19, x0    // x19 = msgSend function pointer
   mov x20, x1    // x20 = retdata pointer
@@ -241,10 +251,11 @@ Lhfaret_arm64:
 
 Ldone_arm64:
   sub sp, x29, #32
-  ldp x21, x22, [sp], #16
-  ldp x19, x20, [sp], #16
+  ldp x22, x21, [sp], #16
+  ldp x20, x19, [sp], #16
   ldp x29, x30, [sp], #16
   ret
+  .cfi_endproc
 
 #else
 #error Unsupported architecture for NSInvoke

@@ -16,6 +16,7 @@ void __invoke__(void *send, void *retdata, marg_list args, size_t len, char rett
 
 #if defined(__arm64__)
 unsigned __NSARM64DoubleHFACount(const char *type);
+void __NSARM64ExtendToInt(void *value, const char *type);
 #endif
 
 extern void _CF_forwarding_prep_0();
