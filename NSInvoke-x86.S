@@ -158,10 +158,11 @@ Ldone:
 
 // ARM64 __invoke__
 // x0 = msgSend function pointer
-// x1 = retdata pointer
+// x1 = retdata pointer, also passed in x8 as the indirect result location
 // x2 = args (marg_list)
-// x3 = frame_length
-// x4 = return_type
+// x3 = frame_length (a multiple of 8)
+// w4 = return type character ('v' stores nothing, for void and indirect results)
+// w5 = number of double members returned in d0-d3 (0 if none)
 //
 // marg_list layout for ARM64:
 //   bytes 0-63:   x0-x7 integer/pointer register args (8 * 8 bytes)
@@ -175,61 +176,54 @@ Ldone:
 
   mov x19, x0    // x19 = msgSend function pointer
   mov x20, x1    // x20 = retdata pointer
-  mov x21, x4    // x21 = return_type
-  mov x22, x2    // x22 = args pointer (saved so we can load x2 as argument)
+  mov w21, w4    // w21 = return type character
+  mov w22, w5    // w22 = returned double member count
+  mov x9, x2     // x9 = args pointer
 
   // Copy stack arguments if frame_length > 128
   cmp x3, #128
   b.le Lno_stack_args_arm64
 
-  sub x9, x3, #128     // number of stack arg bytes
+  sub x10, x3, #128    // number of stack arg bytes
   // Align stack allocation to 16 bytes
-  add x9, x9, #15
-  and x9, x9, #-16
-  sub sp, sp, x9
+  add x10, x10, #15
+  and x10, x10, #-16
+  sub sp, sp, x10
 
   // Copy stack args
-  add x10, x22, #128   // source = args + 128
-  mov x11, sp           // dest = sp
-  sub x12, x3, #128    // remaining bytes
+  add x11, x9, #128    // source = args + 128
+  mov x12, sp          // dest = sp
+  sub x13, x3, #128    // remaining bytes
 Lcopy_loop_arm64:
-  ldr x13, [x10], #8
-  str x13, [x11], #8
-  subs x12, x12, #8
+  ldr x14, [x11], #8
+  str x14, [x12], #8
+  subs x13, x13, #8
   b.gt Lcopy_loop_arm64
 
 Lno_stack_args_arm64:
-  // Load floating-point register arguments from args
-  ldp d0, d1, [x22, #64]
-  ldp d2, d3, [x22, #80]
-  ldp d4, d5, [x22, #96]
-  ldp d6, d7, [x22, #112]
+  ldp d0, d1, [x9, #64]
+  ldp d2, d3, [x9, #80]
+  ldp d4, d5, [x9, #96]
+  ldp d6, d7, [x9, #112]
 
-  // Load integer register arguments from args
-  // Load x2 from its slot since x22 holds the args pointer
-  ldp x6, x7, [x22, #48]
-  ldp x4, x5, [x22, #32]
-  ldr x3, [x22, #24]
-  ldr x2, [x22, #16]
-  ldr x1, [x22, #8]
-  ldr x0, [x22, #0]
+  ldp x6, x7, [x9, #48]
+  ldp x4, x5, [x9, #32]
+  ldp x2, x3, [x9, #16]
+  ldp x0, x1, [x9, #0]
+  mov x8, x20
 
-  // Call the function
   blr x19
 
-  // Store return value based on return type
-  ldrb w9, [x21]
+  cmp w21, #0x76       // 'v': nothing to store
+  b.eq Ldone_arm64
+  cbnz w22, Lhfaret_arm64
 
-  // Always store integer return value
-  str x0, [x20]
-  str x1, [x20, #8]
-
-  // Check for float/double return types
-  cmp w9, #0x66        // 'f' = float
+  stp x0, x1, [x20]
+  cmp w21, #0x66       // 'f' = float
   b.eq Lfloatret_arm64
-  cmp w9, #0x64        // 'd' = double
+  cmp w21, #0x64       // 'd' = double
   b.eq Ldoubleret_arm64
-  cmp w9, #0x44        // 'D' = long double (== double on ARM64)
+  cmp w21, #0x44       // 'D' = long double (== double on ARM64)
   b.eq Ldoubleret_arm64
   b Ldone_arm64
 
@@ -239,11 +233,16 @@ Lfloatret_arm64:
 
 Ldoubleret_arm64:
   str d0, [x20]
+  b Ldone_arm64
+
+Lhfaret_arm64:
+  stp d0, d1, [x20]
+  stp d2, d3, [x20, #16]
 
 Ldone_arm64:
-  mov sp, x29
-  ldp x21, x22, [sp, #-32]
-  ldp x19, x20, [sp, #-16]
+  sub sp, x29, #32
+  ldp x21, x22, [sp], #16
+  ldp x19, x20, [sp], #16
   ldp x29, x30, [sp], #16
   ret
 

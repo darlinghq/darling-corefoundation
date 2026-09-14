@@ -48,7 +48,8 @@ struct objc_sendv_margs {
     uintptr_t stackArgs[];
 };
 
-id ___forwarding___(struct objc_sendv_margs *args, void *returnStorage)
+// indirectResult is the caller's x8 on arm64 (unused elsewhere).
+id ___forwarding___(struct objc_sendv_margs *args, void *returnStorage, void *indirectResult)
 {
     id self = (id)args->a[0];
     SEL _cmd = (SEL)args->a[1];
@@ -132,6 +133,12 @@ id ___forwarding___(struct objc_sendv_margs *args, void *returnStorage)
     }
 
     [target forwardInvocation:inv];
+#if defined(__arm64__)
+    if ([signature _stret])
+    {
+        returnStorage = indirectResult;
+    }
+#endif
     [inv getReturnValue:returnStorage];
     return nil;
 }

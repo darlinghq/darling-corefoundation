@@ -108,12 +108,15 @@
             memcpy(_frame, frame, [_signature frameLength]);
         }
 
+#if !defined(__arm64__)
+        // On arm64 the indirect result location travels in x8, outside the frame.
         if ([sig _stret])
         {
             // Set up the return value pointer for the objc_msgSend_stret call.
             void **ret = _frame;
             *ret = _retdata;
         }
+#endif
     }
 
     return self;
@@ -291,17 +294,24 @@ static BOOL isBlock(id object)
         return;
     }
 
+#if defined(__arm64__)
+    const char *returnType = stripQualifiersAndComments([_signature methodReturnType]);
+    // An indirect result is written by the callee through x8 (_retdata), so the trampoline stores nothing.
+    char rettype = [_signature _stret] ? _C_VOID : returnType[0];
+    __invoke__(imp, _retdata, frame, [_signature frameLength], rettype, __NSARM64DoubleHFACount(returnType));
+#else
     char rettype = [_signature methodReturnType][0];
 
     if ([_signature _stret])
     {
         char dummy[RET_SIZE_ARGS];
-        __invoke__(imp, &dummy, frame, [_signature frameLength], rettype);
+        __invoke__(imp, &dummy, frame, [_signature frameLength], rettype, 0);
     }
     else
     {
-        __invoke__(imp, _retdata, frame, [_signature frameLength], rettype);
+        __invoke__(imp, _retdata, frame, [_signature frameLength], rettype, 0);
     }
+#endif
 
     if (_retainedArgs)
     {

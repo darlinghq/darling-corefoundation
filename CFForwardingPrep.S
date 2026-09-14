@@ -330,92 +330,95 @@ __CF_forwarding_prep_b:
 .globl __CF_forwarding_prep_1
 .p2align 2
 
-__CF_forwarding_prep_0:
-__CF_forwarding_prep_1:
-    // Save frame and link register
-    stp x29, x30, [sp, #-16]!
-    mov x29, sp
-
-    // Allocate space for register save area (128) + return value (32)
-    sub sp, sp, #160
-
-    // Save integer register arguments at sp+0
+// The marg_list (x0-x7 at 0, d0-d7 at 64) is saved directly below the caller's
+// stack arguments, so they follow at marg_list + 128 as NSMethodSignature lays them out.
+.macro SAVE_MARG_LIST
+    sub sp, sp, #128
+    .cfi_def_cfa_offset 128
     stp x0, x1, [sp, #0]
     stp x2, x3, [sp, #16]
     stp x4, x5, [sp, #32]
     stp x6, x7, [sp, #48]
-
-    // Save floating-point register arguments at sp+64
     stp d0, d1, [sp, #64]
     stp d2, d3, [sp, #80]
     stp d4, d5, [sp, #96]
     stp d6, d7, [sp, #112]
+    stp x29, x30, [sp, #-16]!
+    .cfi_def_cfa_offset 144
+    mov x29, sp
+    .cfi_def_cfa w29, 144
+    .cfi_offset w30, -136
+    .cfi_offset w29, -144
+.endm
 
-    // Call ____forwarding___(marg_list, return_stret_addr)
-    mov x0, sp             // marg_list
-    add x1, sp, #128       // return value storage
+__CF_forwarding_prep_0:
+__CF_forwarding_prep_1:
+    .cfi_startproc
+    SAVE_MARG_LIST
+
+    // 32 bytes of return value storage (x0/x1 or d0-d3), then the caller's indirect result location
+    sub sp, sp, #48
+    stp xzr, xzr, [sp]
+    stp xzr, xzr, [sp, #16]
+    str x8, [sp, #32]
+
+    // ____forwarding___(marg_list, return value storage, indirect result location)
+    add x0, x29, #16
+    mov x1, sp
+    mov x2, x8
     bl  ____forwarding___
 
     cbnz x0, Lfail_arm64   // non-nil means we have a forwarding target
 
-    // Load return values from on-stack storage
-    ldr x0, [sp, #128]
-    ldr d0, [sp, #128]
+    ldp x0, x1, [sp]
+    ldp d0, d1, [sp]
+    ldp d2, d3, [sp, #16]
 
     mov sp, x29
     ldp x29, x30, [sp], #16
+    add sp, sp, #128
     ret
 
 Lfail_arm64:
-    // x0 is the forwarding target (new self)
-    // Restore all other args and restart message send
-    mov x9, x0             // save forwarding target
+    // x0 is the forwarding target (new self); restore the other arguments and resend
+    mov x9, x0
+    ldr x8, [sp, #32]
+    add x10, x29, #16
 
-    ldp d0, d1, [sp, #64]
-    ldp d2, d3, [sp, #80]
-    ldp d4, d5, [sp, #96]
-    ldp d6, d7, [sp, #112]
+    ldp d0, d1, [x10, #64]
+    ldp d2, d3, [x10, #80]
+    ldp d4, d5, [x10, #96]
+    ldp d6, d7, [x10, #112]
 
-    // Restore integer args (x0 = new target, skip original x0)
-    ldr x1, [sp, #8]
-    ldp x2, x3, [sp, #16]
-    ldp x4, x5, [sp, #32]
-    ldp x6, x7, [sp, #48]
+    ldr x1, [x10, #8]
+    ldp x2, x3, [x10, #16]
+    ldp x4, x5, [x10, #32]
+    ldp x6, x7, [x10, #48]
 
-    mov x0, x9             // new self
+    mov x0, x9
 
     mov sp, x29
     ldp x29, x30, [sp], #16
+    add sp, sp, #128
 
-    b   _objc_msgSend      // restart message send with new target
+    b   _objc_msgSend
+    .cfi_endproc
 
 .globl __CF_forwarding_prep_b
 .p2align 2
 
 __CF_forwarding_prep_b:
-    stp x29, x30, [sp, #-16]!
-    mov x29, sp
+    .cfi_startproc
+    SAVE_MARG_LIST
 
-    sub sp, sp, #128
-
-    // Save integer register arguments
-    stp x0, x1, [sp, #0]
-    stp x2, x3, [sp, #16]
-    stp x4, x5, [sp, #32]
-    stp x6, x7, [sp, #48]
-
-    // Save floating-point register arguments
-    stp d0, d1, [sp, #64]
-    stp d2, d3, [sp, #80]
-    stp d4, d5, [sp, #96]
-    stp d6, d7, [sp, #112]
-
-    mov x0, sp
+    add x0, x29, #16
     bl  ___block_forwarding__
 
     mov sp, x29
     ldp x29, x30, [sp], #16
+    add sp, sp, #128
     ret
+    .cfi_endproc
 
 #else
 #error Missing forwarding prep handlers for this arch
