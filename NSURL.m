@@ -952,18 +952,19 @@ static CFTypeRef CFURLSetPropertyForKey(CFURLRef url, CFStringRef key, CFTypeRef
     {
         acceptedValue = CFRetain(value);
     }
-    else if (CFEqual(key, kCFURLFileSecurityKey))
+    else if (CFEqual(key, kCFURLFileSecurityKey) && [(id)value isKindOfClass:objc_getClass("NSFileSecurity")])
     {
         // Apply the owner, group and permission bits that are set; ACLs and UUIDs are ignored.
+        // chown() clears the set-user-ID and set-group-ID bits, so the mode is applied after it.
         UInt8 path[PATH_MAX] = { 0 };
         CFFileSecurityRef security = (CFFileSecurityRef)value;
         uid_t owner; gid_t group; mode_t mode;
         Boolean hasOwner = CFFileSecurityGetOwner(security, &owner);
         Boolean hasGroup = CFFileSecurityGetGroup(security, &group);
         Boolean ok = CFURLGetFileSystemRepresentation(url, true, path, PATH_MAX);
-        if (ok && CFFileSecurityGetMode(security, &mode) && chmod((const char *)path, mode) != 0)
-            ok = false;
         if (ok && (hasOwner || hasGroup) && chown((const char *)path, hasOwner ? owner : (uid_t)-1, hasGroup ? group : (gid_t)-1) != 0)
+            ok = false;
+        if (ok && CFFileSecurityGetMode(security, &mode) && chmod((const char *)path, mode) != 0)
             ok = false;
         if (ok)
             acceptedValue = CFRetain(value);
