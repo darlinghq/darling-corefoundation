@@ -689,6 +689,7 @@ CFDictionaryRef CFURLCopyResourcePropertiesForKeys(CFURLRef url, CFArrayRef keys
     CFMutableDictionaryRef resourceInfo = CFURLResourceInfo(url);
     CFIndex count = CFArrayGetCount(keys);
     CFIndex propCount = 0;
+    Boolean failed = false;
     if (count > STACK_BUFFER_SIZE)
     {
         property_keys = malloc(sizeof(CFTypeRef) * count);
@@ -716,7 +717,22 @@ CFDictionaryRef CFURLCopyResourcePropertiesForKeys(CFURLRef url, CFArrayRef keys
 
         if (value == NULL)
         {
-            value = CFURLCreatePropertyForKey(url, key, error);
+            CFErrorRef propertyError = NULL;
+            value = CFURLCreatePropertyForKey(url, key, &propertyError);
+            if (value == NULL && propertyError != NULL)
+            {
+                // Like macOS, fail the whole request (e.g. a missing file) instead of leaving the key out.
+                if (error != NULL)
+                {
+                    *error = propertyError;
+                }
+                else
+                {
+                    CFRelease(propertyError);
+                }
+                failed = true;
+                break;
+            }
         }
         else
         {
@@ -736,7 +752,10 @@ CFDictionaryRef CFURLCopyResourcePropertiesForKeys(CFURLRef url, CFArrayRef keys
 
     CFURLResourceInfoRelease(resourceInfo);
 
-    props = CFDictionaryCreate(kCFAllocatorDefault, property_keys, property_values, propCount, &kCFCopyStringDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    if (!failed)
+    {
+        props = CFDictionaryCreate(kCFAllocatorDefault, property_keys, property_values, propCount, &kCFCopyStringDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    }
 
     if (property_keys != &stack_keys[0])
     {
