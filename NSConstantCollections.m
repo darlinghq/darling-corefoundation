@@ -134,8 +134,13 @@ SINGLETON_RR()
 @end
 
 // Empty `@[]` and `@{}` literals reference these singletons instead of emitting their own objects.
+#if __OBJC2__
 extern struct { Class isa; } _NSConstantArrayClass __asm("_OBJC_CLASS_$_NSConstantArray");
 extern struct { Class isa; } _NSConstantDictionaryClass __asm("_OBJC_CLASS_$_NSConstantDictionary");
+#else
+extern struct { Class isa; } _NSConstantArrayClass __asm(".objc_class_name_NSConstantArray");
+extern struct { Class isa; } _NSConstantDictionaryClass __asm(".objc_class_name_NSConstantDictionary");
+#endif
 
 __attribute__((visibility("default")))
 struct __NSConstantArrayLayout __NSArray0__struct = {
