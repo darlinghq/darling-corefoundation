@@ -210,14 +210,12 @@ static void NSUnrecognizedForwarding() { __asm__("int3"); }
 
 + (void)forwardInvocation:(NSInvocation *)inv
 {
-    [inv setTarget:self];
-    [inv invoke];
+    [self doesNotRecognizeSelector:[inv selector]];
 }
 
 - (void)forwardInvocation:(NSInvocation *)inv
 {
-    [inv setTarget:self];
-    [inv invoke];
+    [self doesNotRecognizeSelector:[inv selector]];
 }
 
 - (void)__dealloc_zombie
