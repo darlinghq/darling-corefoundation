@@ -302,8 +302,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
         // Key for the resource’s creation date, returned as a CFDate object if the volume supports creation dates, or nil if creation dates are unsupported.
         if (CFURLStat(url, &info))
         {
-            CFTimeInterval t = (CFTimeInterval)(info.st_ctime * NSEC_PER_SEC + info.st_ctimespec.tv_nsec) / (CFTimeInterval)NSEC_PER_SEC;
-            value = CFDateCreate(kCFAllocatorDefault, t);
+            value = CFDateCreate(kCFAllocatorDefault, _CFAbsoluteTimeFromFileTimeSpec(info.st_ctimespec));
         }
         else
         {
@@ -314,8 +313,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
     {
         if (CFURLStat(url, &info))
         {
-            CFTimeInterval t = (CFTimeInterval)(info.st_atime * NSEC_PER_SEC + info.st_atimespec.tv_nsec) / (CFTimeInterval)NSEC_PER_SEC;
-            value = CFDateCreate(kCFAllocatorDefault, t);
+            value = CFDateCreate(kCFAllocatorDefault, _CFAbsoluteTimeFromFileTimeSpec(info.st_atimespec));
         }
         else
         {
@@ -326,8 +324,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
     {
         if (CFURLStat(url, &info))
         {
-            CFTimeInterval t = (CFTimeInterval)(info.st_mtime * NSEC_PER_SEC + info.st_mtimespec.tv_nsec) / (CFTimeInterval)NSEC_PER_SEC;
-            value = CFDateCreate(kCFAllocatorDefault, t);
+            value = CFDateCreate(kCFAllocatorDefault, _CFAbsoluteTimeFromFileTimeSpec(info.st_mtimespec));
         }
         else
         {
@@ -338,8 +335,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
     {
         if (CFURLStat(url, &info))
         {
-            CFTimeInterval t = (CFTimeInterval)(info.st_mtime * NSEC_PER_SEC + info.st_mtimespec.tv_nsec) / (CFTimeInterval)NSEC_PER_SEC;
-            value = CFDateCreate(kCFAllocatorDefault, t);
+            value = CFDateCreate(kCFAllocatorDefault, _CFAbsoluteTimeFromFileTimeSpec(info.st_mtimespec));
         }
         else
         {
