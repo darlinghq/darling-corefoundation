@@ -180,7 +180,8 @@ static Boolean CFURLStat(CFURLRef url, struct stat *info) {
 
     if (CFURLGetFileSystemRepresentation(url, true, path, PATH_MAX))
     {
-        return stat(path, info) != -1;
+        // Resource metadata describes the link itself, including a dangling link.
+        return lstat(path, info) != -1;
     }
 
     return false;
