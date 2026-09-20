@@ -1897,7 +1897,7 @@ SINGLETON_RR()
 {
     if (_CFArrayIsMutable((CFArrayRef)self))
     {
-        if (index > CFArrayGetCount((CFArrayRef)self))
+        if (index >= CFArrayGetCount((CFArrayRef)self))
         {
             [NSException raise:NSRangeException format:@"%d is out of bounds of array", index];
         }
