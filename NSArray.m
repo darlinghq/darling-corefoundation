@@ -231,7 +231,8 @@ CF_PRIVATE
 
 - (void)replaceObjectsInRange:(NSRange)range withObjects:(const id *)objects count:(NSUInteger)count
 {
-    if (NSMaxRange(range) > [self count])
+    NSUInteger arrayCount = [self count];
+    if (range.location > arrayCount || range.length > arrayCount - range.location)
     {
         [NSException raise:NSRangeException format:@"Range out of bounds of array"];
         return;
@@ -464,10 +465,7 @@ CF_PRIVATE
 
 - (void)removeObjectsInRange:(NSRange)range
 {
-    for (NSInteger idx = NSMaxRange(range) - 1; idx >= range.location; idx--)
-    {
-        [self removeObjectAtIndex:idx];
-    }
+    [self replaceObjectsInRange:range withObjects:NULL count:0];
 }
 
 - (void)replaceObjectsInRange:(NSRange)range withObjectsFromArray:(NSArray *)other range:(NSRange)otherRange
