@@ -37,6 +37,39 @@
 #pragma mark -
 #pragma mark Localized Strings
 
+// A <table>.loctable sits at the top of Resources and holds every localization's table, keyed by localization name.
+static CFDictionaryRef _CFBundleCopyLocTableStrings(CFBundleRef bundle, CFStringRef tableName, CFStringRef localizationName) {
+    CFURLRef url = CFBundleCopyResourceURL(bundle, tableName, CFSTR("loctable"), NULL);
+    if (!url) return NULL;
+    CFDataRef data = NULL;
+    SInt32 errCode;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated"
+    Boolean read = CFURLCreateDataAndPropertiesFromResource(kCFAllocatorSystemDefault, url, &data, NULL, NULL, &errCode);
+#pragma GCC diagnostic pop
+    CFRelease(url);
+    if (!read) return NULL;
+    CFErrorRef error = NULL;
+    CFDictionaryRef locTable = (CFDictionaryRef)CFPropertyListCreateWithData(CFGetAllocator(bundle), data, kCFPropertyListImmutable, NULL, &error);
+    CFRelease(data);
+    if (!locTable) {
+        CFLog(kCFLogLevelError, CFSTR("Unable to load loctable file: %@ / %@: %@"), bundle, tableName, error);
+        if (error) CFRelease(error);
+        return NULL;
+    }
+    CFDictionaryRef result = NULL;
+    if (CFGetTypeID(locTable) == CFDictionaryGetTypeID()) {
+        CFArrayRef languages = localizationName ? CFArrayCreate(kCFAllocatorSystemDefault, (const void **)&localizationName, 1, &kCFTypeArrayCallBacks) : _CFBundleCopyLanguageSearchListInBundle(bundle);
+        for (CFIndex i = 0; !result && i < CFArrayGetCount(languages); i++) {
+            CFTypeRef table = CFDictionaryGetValue(locTable, CFArrayGetValueAtIndex(languages, i));
+            if (table && CFGetTypeID(table) == CFDictionaryGetTypeID()) result = (CFDictionaryRef)CFRetain(table);
+        }
+        CFRelease(languages);
+    }
+    CFRelease(locTable);
+    return result;
+}
+
 
 CF_EXPORT CFStringRef CFBundleCopyLocalizedString(CFBundleRef bundle, CFStringRef key, CFStringRef value, CFStringRef tableName) {
     return CFBundleCopyLocalizedStringForLocalization(bundle, key, value, tableName, NULL);
@@ -98,6 +131,7 @@ CF_EXPORT CFStringRef CFBundleCopyLocalizedStringForLocalization(CFBundleRef bun
             if (nameForSharing) CFRelease(nameForSharing);
             if (tableURL) CFRelease(tableURL);
         }
+        if (!stringTable) stringTable = _CFBundleCopyLocTableStrings(bundle, tableName, localizationName);
         if (!stringTable) stringTable = CFDictionaryCreate(CFGetAllocator(bundle), NULL, NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
         
         if ((!CFStringHasSuffix(tableName, CFSTR(".nocache")) || !_CFExecutableLinkedOnOrAfter(CFSystemVersionLeopard)) && localizationName == NULL) {
@@ -114,6 +148,7 @@ CF_EXPORT CFStringRef CFBundleCopyLocalizedStringForLocalization(CFBundleRef bun
     }
     
     result = (CFStringRef)CFDictionaryGetValue(stringTable, key);
+    if (result && CFGetTypeID(result) != CFStringGetTypeID()) result = NULL;
     if (result) {
         CFRetain(result);
     }
