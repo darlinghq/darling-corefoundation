@@ -442,6 +442,18 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
     {
         
     }
+    else if (CFEqual(key, kCFURLFileSizeKey))
+    {
+        if (CFURLStat(url, &info))
+        {
+            int64_t size = info.st_size;
+            value = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt64Type, &size);
+        }
+        else
+        {
+            posixError(error);
+        }
+    }
     else if (CFEqual(key, kCFURLPreferredIOBlockSizeKey))
     {
         // Key for the optimal block size to use when reading or writing this file's data, returned as a CFNumber object, or NULL if the preferred size is not available.
