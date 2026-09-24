@@ -110,7 +110,7 @@ extern size_t malloc_good_size(size_t size);
 #endif
 extern void __CFStrConvertBytesToUnicode(const uint8_t *bytes, UniChar *buffer, CFIndex numChars);
 
-static void __CFStringAppendFormatCore(CFMutableStringRef outputString, CFStringRef (*copyDescFunc)(void *, const void *), CFStringRef (*contextDescFunc)(void *, const void *, const void *, bool, bool *), CFDictionaryRef formatOptions, CFDictionaryRef stringsDictConfig, CFStringRef formatString, CFIndex initialArgPosition, const void *origValues, CFIndex originalValuesSize, va_list args);
+static void __CFStringAppendFormatCore(CFMutableStringRef outputString, CFStringRef (*copyDescFunc)(void *, const void *), CFStringRef (*contextDescFunc)(void *, const void *, const void *, bool, bool *), CFDictionaryRef formatOptions, CFDictionaryRef stringsDictConfig, CFStringRef formatString, CFIndex initialArgPosition, const void *origValues, CFIndex originalValuesSize, va_list args, CFMutableArrayRef metadata);
 
 #if defined(DEBUG)
 
@@ -1618,7 +1618,7 @@ CFStringRef  _CFStringCreateWithFormatAndArgumentsAux2(CFAllocatorRef alloc, CFS
     CFStringRef str;
     CFMutableStringRef outputString = CFStringCreateMutable(kCFAllocatorSystemDefault, 0); //should use alloc if no copy/release
     __CFStrSetDesiredCapacity(outputString, 120);	// Given this will be tightened later, choosing a larger working string is fine
-    __CFStringAppendFormatCore(outputString, copyDescFunc, contextDescFunc, formatOptions, NULL, format, 0, NULL, 0, arguments);
+    __CFStringAppendFormatCore(outputString, copyDescFunc, contextDescFunc, formatOptions, NULL, format, 0, NULL, 0, arguments, NULL);
     // ??? copy/release should not be necessary here -- just make immutable, compress if possible
     // (However, this does make the string inline, and cause the supplied allocator to be used...)
     str = (CFStringRef)CFStringCreateCopy(alloc, outputString);
@@ -1626,6 +1626,16 @@ CFStringRef  _CFStringCreateWithFormatAndArgumentsAux2(CFAllocatorRef alloc, CFS
     return str;
 }
     
+CFStringRef _CFStringCreateWithFormatAndArgumentsReturningMetadata(CFAllocatorRef alloc, CFStringRef (*copyDescFunc)(void *, const void *), CFStringRef (*contextDescFunc)(void *, const void *, const void *, bool, bool *), CFDictionaryRef formatOptions, CFDictionaryRef formatConfiguration, CFStringRef format, CFArrayRef *outMetadata, va_list arguments) {
+    CFMutableStringRef outputString = CFStringCreateMutable(kCFAllocatorSystemDefault, 0);
+    CFMutableArrayRef metadata = outMetadata ? CFArrayCreateMutable(kCFAllocatorSystemDefault, 0, &kCFTypeArrayCallBacks) : NULL;
+    __CFStringAppendFormatCore(outputString, copyDescFunc, contextDescFunc, formatOptions, formatConfiguration, format, 0, NULL, 0, arguments, metadata);
+    CFStringRef str = (CFStringRef)CFStringCreateCopy(alloc, outputString);
+    CFRelease(outputString);
+    if (outMetadata) *outMetadata = metadata;
+    return str;
+}
+
 CFStringRef  _CFStringCreateWithFormatAndArgumentsAux(CFAllocatorRef alloc, CFStringRef (*copyDescFunc)(void *, const void *), CFDictionaryRef formatOptions, CFStringRef format, va_list arguments) {
     return _CFStringCreateWithFormatAndArgumentsAux2(alloc, copyDescFunc, NULL, formatOptions, format, arguments);
 }
@@ -5430,6 +5440,8 @@ typedef struct {
     int8_t widthArgNum;
     int8_t configDictIndex;
     int8_t numericFormatStyle;        // Only set for localizable numeric quantities
+    SInt32 specLoc;                   // whole '%...' specifier in the format; specLen is 0 for literal chunks
+    SInt32 specLen;
 } CFFormatSpec;
 
 typedef struct {
@@ -5889,7 +5901,7 @@ reswtch:switch (ch) {
 /* ??? %s depends on handling of encodings by __CFStringAppendBytes
 */
 void CFStringAppendFormatAndArguments(CFMutableStringRef outputString, CFDictionaryRef formatOptions, CFStringRef formatString, va_list args) {
-    __CFStringAppendFormatCore(outputString, NULL, NULL, formatOptions, NULL, formatString, 0, NULL, 0, args);
+    __CFStringAppendFormatCore(outputString, NULL, NULL, formatOptions, NULL, formatString, 0, NULL, 0, args, NULL);
 }
         
 // Length of the buffer to call sprintf() with
@@ -5929,15 +5941,45 @@ void CFStringAppendFormatAndArguments(CFMutableStringRef outputString, CFDiction
     }}
 #endif
 
+CONST_STRING_DECL(_kCFStringFormatMetadataReplacementIndexKey, "Index")
+CONST_STRING_DECL(_kCFStringFormatMetadataSpecifierRangeLocationInFormatStringKey, "SpecLocation")
+CONST_STRING_DECL(_kCFStringFormatMetadataSpecifierRangeLengthInFormatStringKey, "SpecLength")
+CONST_STRING_DECL(_kCFStringFormatMetadataReplacementRangeLocationKey, "ReplacementLocation")
+CONST_STRING_DECL(_kCFStringFormatMetadataReplacementRangeLengthKey, "ReplacementLength")
+CONST_STRING_DECL(_kCFStringFormatMetadataArgumentObjectKey, "Object")
+
+static void __CFStringFormatSetIndex(CFMutableDictionaryRef dict, CFStringRef key, CFIndex value) {
+    CFNumberRef number = CFNumberCreate(kCFAllocatorSystemDefault, kCFNumberCFIndexType, &value);
+    CFDictionarySetValue(dict, key, number);
+    CFRelease(number);
+}
+
+// Key names and layout follow swift-corelibs-foundation's _CFStringCreateWithFormatAndArgumentsReturningMetadata.
+static void __CFStringFormatAppendMetadata(CFMutableArrayRef metadata, const CFFormatSpec *spec, const CFPrintValue *values, CFIndex lengthBefore, CFIndex lengthAfter) {
+    if (spec->specLen == 0) return;
+    CFMutableDictionaryRef entry = CFDictionaryCreateMutable(kCFAllocatorSystemDefault, 6, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    __CFStringFormatSetIndex(entry, _kCFStringFormatMetadataSpecifierRangeLocationInFormatStringKey, spec->specLoc);
+    __CFStringFormatSetIndex(entry, _kCFStringFormatMetadataSpecifierRangeLengthInFormatStringKey, spec->specLen);
+    __CFStringFormatSetIndex(entry, _kCFStringFormatMetadataReplacementRangeLocationKey, lengthBefore);
+    __CFStringFormatSetIndex(entry, _kCFStringFormatMetadataReplacementRangeLengthKey, lengthAfter - lengthBefore);
+    if (spec->type != CFFormatLiteralType && spec->mainArgNum >= 0) {
+        __CFStringFormatSetIndex(entry, _kCFStringFormatMetadataReplacementIndexKey, spec->mainArgNum + 1);
+        const void *object = values[spec->mainArgNum].value.pointerValue;
+        if (spec->type == CFFormatCFType && object) CFDictionarySetValue(entry, _kCFStringFormatMetadataArgumentObjectKey, object);
+    }
+    CFArrayAppendValue(metadata, entry);
+    CFRelease(entry);
+}
+
 void _CFStringAppendFormatAndArgumentsAux2(CFMutableStringRef outputString, CFStringRef (*copyDescFunc)(void *, const void *), CFStringRef (*contextDescFunc)(void *, const void *, const void *, bool, bool *), CFDictionaryRef formatOptions, CFStringRef formatString, va_list args) {
-    __CFStringAppendFormatCore(outputString, copyDescFunc, contextDescFunc, formatOptions, NULL, formatString, 0, NULL, 0, args);
+    __CFStringAppendFormatCore(outputString, copyDescFunc, contextDescFunc, formatOptions, NULL, formatString, 0, NULL, 0, args, NULL);
 }
     
 void _CFStringAppendFormatAndArgumentsAux(CFMutableStringRef outputString, CFStringRef (*copyDescFunc)(void *, const void *), CFDictionaryRef formatOptions, CFStringRef formatString, va_list args) {
     _CFStringAppendFormatAndArgumentsAux2(outputString, copyDescFunc, NULL, formatOptions, formatString, args);
 }
     
-static void __CFStringAppendFormatCore(CFMutableStringRef outputString, CFStringRef (*copyDescFunc)(void *, const void *), CFStringRef (*contextDescFunc)(void *, const void *, const void *, bool, bool *), CFDictionaryRef formatOptions, CFDictionaryRef stringsDictConfig, CFStringRef formatString, CFIndex initialArgPosition, const void *origValues, CFIndex originalValuesSize, va_list args) {
+static void __CFStringAppendFormatCore(CFMutableStringRef outputString, CFStringRef (*copyDescFunc)(void *, const void *), CFStringRef (*contextDescFunc)(void *, const void *, const void *, bool, bool *), CFDictionaryRef formatOptions, CFDictionaryRef stringsDictConfig, CFStringRef formatString, CFIndex initialArgPosition, const void *origValues, CFIndex originalValuesSize, va_list args, CFMutableArrayRef metadata) {
     SInt32 numSpecs, sizeSpecs, sizeArgNum, formatIdx, curSpec, argNum;
     CFIndex formatLen;
 #define FORMAT_BUFFER_LEN 400
@@ -6010,6 +6052,8 @@ static void __CFStringAppendFormatCore(CFMutableStringRef outputString, CFString
 	specs[curSpec].precArgNum = -1;
 	specs[curSpec].widthArgNum = -1;
 	specs[curSpec].configDictIndex = -1;
+	specs[curSpec].specLoc = formatIdx;
+	specs[curSpec].specLen = 0;
         if (cformat) {
             for (newFmtIdx = formatIdx; newFmtIdx < formatLen && '%' != cformat[newFmtIdx]; newFmtIdx++);
         } else {
@@ -6022,6 +6066,7 @@ static void __CFStringAppendFormatCore(CFMutableStringRef outputString, CFString
 	    CFStringRef configKey = NULL;
 	    newFmtIdx++;	/* Skip % */
 	    __CFParseFormatSpec(uformat, cformat, &newFmtIdx, formatLen, &(specs[curSpec]), &configKey);
+	    specs[curSpec].specLen = newFmtIdx - formatIdx;
             if (CFFormatLiteralType == specs[curSpec].type) {
 		specs[curSpec].loc = formatIdx + 1;
 		specs[curSpec].len = 1;
@@ -6177,6 +6222,7 @@ static void __CFStringAppendFormatCore(CFMutableStringRef outputString, CFString
 	    precision = specs[curSpec].precArg;
 	    hasPrecision = true;
 	}
+	CFIndex lengthBefore = metadata ? CFStringGetLength(outputString) : 0;
 
 	switch (specs[curSpec].type) {
 	case CFFormatLongType:
@@ -6497,6 +6543,7 @@ static void __CFStringAppendFormatCore(CFMutableStringRef outputString, CFString
             }
             break;
         }
+        if (metadata) __CFStringFormatAppendMetadata(metadata, &specs[curSpec], values, lengthBefore, CFStringGetLength(outputString));
     }
     
     for (SInt32 i = 0; i < numSpecsContext; i++) {
