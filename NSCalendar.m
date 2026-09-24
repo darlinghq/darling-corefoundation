@@ -583,8 +583,18 @@ US Locale Fiscal Quarters:
 
 - (id)copyWithZone:(NSZone *)zone
 {
-    // this seems incomplete
-    return (id)CFCalendarCreateWithIdentifier(kCFAllocatorDefault, CFCalendarGetIdentifier((CFCalendarRef)self));
+    CFCalendarRef original = (CFCalendarRef)self;
+    CFCalendarRef copy = CFCalendarCreateWithIdentifier(kCFAllocatorDefault, CFCalendarGetIdentifier(original));
+    CFLocaleRef locale = CFCalendarCopyLocale(original);
+    CFTimeZoneRef timeZone = CFCalendarCopyTimeZone(original);
+    CFCalendarSetLocale(copy, locale);
+    CFCalendarSetTimeZone(copy, timeZone);
+    CFRelease(locale);
+    CFRelease(timeZone);
+    // After the locale and time zone: changing either rebuilds the ICU calendar, which resets these two.
+    CFCalendarSetFirstWeekday(copy, CFCalendarGetFirstWeekday(original));
+    CFCalendarSetMinimumDaysInFirstWeek(copy, CFCalendarGetMinimumDaysInFirstWeek(original));
+    return (id)copy;
 }
 
 - (NSUInteger)retainCount
