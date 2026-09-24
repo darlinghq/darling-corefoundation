@@ -193,6 +193,97 @@ static Boolean CFURLStat(CFURLRef url, struct stat *info) {
     return false;
 }
 
+// UniformTypeIdentifiers links Foundation, so CoreFoundation loads it at runtime to reach its UTType class.
+@protocol CFURLUTType <NSObject>
++ (id)typeWithFilenameExtension:(NSString *)filenameExtension conformingToType:(id)supertype;
+- (BOOL)isDeclared;
+@end
+
+static Class<CFURLUTType> UTTypeClass;
+static id UTTypeItemObject, UTTypeDataObject, UTTypeDirectoryObject, UTTypeFolderObject, UTTypeSymbolicLinkObject, UTTypeUnixExecutableObject;
+static CFErrorRef UTLoadError;
+
+static void CFURLLoadUniformTypeIdentifiers(void *context)
+{
+    void *handle = dlopen("/System/Library/Frameworks/UniformTypeIdentifiers.framework/UniformTypeIdentifiers", RTLD_LAZY | RTLD_LOCAL);
+    if (handle == NULL)
+    {
+        dlError(&UTLoadError);
+        return;
+    }
+
+    const struct { const char *symbol; id *object; } constants[] = {
+        { "UTTypeItem", &UTTypeItemObject },
+        { "UTTypeData", &UTTypeDataObject },
+        { "UTTypeDirectory", &UTTypeDirectoryObject },
+        { "UTTypeFolder", &UTTypeFolderObject },
+        { "UTTypeSymbolicLink", &UTTypeSymbolicLinkObject },
+        { "UTTypeUnixExecutable", &UTTypeUnixExecutableObject },
+    };
+    for (size_t i = 0; i < sizeof(constants) / sizeof(constants[0]); i++)
+    {
+        id *constant = dlsym(handle, constants[i].symbol);
+        if (constant == NULL)
+        {
+            dlError(&UTLoadError);
+            return;
+        }
+        *constants[i].object = *constant;
+    }
+    UTTypeClass = dlsym(handle, "OBJC_CLASS_$_UTType");
+    if (UTTypeClass == nil)
+        dlError(&UTLoadError);
+}
+
+// A directory keeps its extension's type only when that type is declared (an .app bundle); otherwise it is a folder.
+static CFTypeRef CFURLCreateContentType(CFURLRef url, CFErrorRef *error)
+{
+    static dispatch_once_t once;
+    dispatch_once_f(&once, NULL, CFURLLoadUniformTypeIdentifiers);
+    if (UTTypeClass == nil)
+    {
+        if (error != NULL)
+            *error = (CFErrorRef)CFRetain(UTLoadError);
+        return NULL;
+    }
+
+    struct stat info;
+    if (!CFURLStat(url, &info))
+    {
+        posixError(error);
+        return NULL;
+    }
+
+    CFTypeRef value = NULL;
+    @autoreleasepool {
+        NSString *extension = [(NSString *)CFURLCopyPathExtension(url) autorelease];
+        BOOL hasExtension = [extension length] > 0;
+        id type = UTTypeItemObject;
+
+        if (S_ISLNK(info.st_mode))
+        {
+            type = UTTypeSymbolicLinkObject;
+        }
+        else if (S_ISDIR(info.st_mode))
+        {
+            id bundleType = hasExtension ? [UTTypeClass typeWithFilenameExtension: extension conformingToType: UTTypeDirectoryObject] : nil;
+            type = [bundleType isDeclared] ? bundleType : UTTypeFolderObject;
+        }
+        else if (S_ISREG(info.st_mode))
+        {
+            if (hasExtension)
+                type = [UTTypeClass typeWithFilenameExtension: extension conformingToType: UTTypeDataObject];
+            else
+                type = (info.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) ? UTTypeUnixExecutableObject : UTTypeDataObject;
+        }
+        if (type != nil)
+            value = CFRetain(type);
+        else if (error != NULL)
+            *error = CFErrorCreate(kCFAllocatorDefault, kCFErrorDomainPOSIX, EINVAL, NULL);
+    }
+    return value;
+}
+
 static pthread_mutex_t resInfoLock = PTHREAD_MUTEX_INITIALIZER;
 
 static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErrorRef *error)
@@ -410,6 +501,10 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
         value = UTTypeCreatePreferredIdentifierForTag(*tagType, extension, NULL); 
 
         CFRelease(extension);
+    }
+    else if (CFEqual(key, (CFStringRef)NSURLContentTypeKey))
+    {
+        value = CFURLCreateContentType(url, error);
     }
     else if (CFEqual(key, kCFURLLocalizedTypeDescriptionKey))
     {
