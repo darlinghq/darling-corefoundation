@@ -5,6 +5,7 @@
 //  Copyright (c) 2014 Apportable. All rights reserved.
 //
 
+#import <dispatch/dispatch.h>
 #import <Foundation/NSCharacterSet.h>
 #import "NSCFType.h"
 #import "CFInternal.h"
@@ -19,6 +20,76 @@ CF_PRIVATE
 @end
 
 @implementation NSCharacterSet
+
+// Match the URL component sets in swift-corelibs-foundation's
+// CoreFoundation/URL.subproj/CFURLComponents_URIParser.c. In particular,
+// host permits IPv6 brackets, while path excludes the RFC 1808 parameter
+// separator ';'. These are immutable process-lifetime singletons.
++ (NSCharacterSet *)URLUserAllowedCharacterSet
+{
+    static NSCharacterSet *set;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        set = [[NSCharacterSet characterSetWithCharactersInString:
+            @"!$&'()*+,-.0123456789;=ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz~"] retain];
+    });
+    return set;
+}
+
++ (NSCharacterSet *)URLPasswordAllowedCharacterSet
+{
+    static NSCharacterSet *set;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        set = [[NSCharacterSet characterSetWithCharactersInString:
+            @"!$&'()*+,-.0123456789;=ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz~"] retain];
+    });
+    return set;
+}
+
++ (NSCharacterSet *)URLHostAllowedCharacterSet
+{
+    static NSCharacterSet *set;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        set = [[NSCharacterSet characterSetWithCharactersInString:
+            @"!$&'()*+,-.0123456789:;=ABCDEFGHIJKLMNOPQRSTUVWXYZ[]_abcdefghijklmnopqrstuvwxyz~"] retain];
+    });
+    return set;
+}
+
++ (NSCharacterSet *)URLPathAllowedCharacterSet
+{
+    static NSCharacterSet *set;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        set = [[NSCharacterSet characterSetWithCharactersInString:
+            @"!$&'()*+,-./0123456789:=@ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz~"] retain];
+    });
+    return set;
+}
+
++ (NSCharacterSet *)URLQueryAllowedCharacterSet
+{
+    static NSCharacterSet *set;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        set = [[NSCharacterSet characterSetWithCharactersInString:
+            @"!$&'()*+,-./0123456789:;=?@ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz~"] retain];
+    });
+    return set;
+}
+
++ (NSCharacterSet *)URLFragmentAllowedCharacterSet
+{
+    static NSCharacterSet *set;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        set = [[NSCharacterSet characterSetWithCharactersInString:
+            @"!$&'()*+,-./0123456789:;=?@ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz~"] retain];
+    });
+    return set;
+}
 
 + (id)controlCharacterSet
 {
