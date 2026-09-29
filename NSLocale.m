@@ -264,8 +264,23 @@ NSString *const NSLocaleLanguageConfidenceMedium = @"NSLocaleLanguageConfidenceM
 
 - (id)_prefs
 {
-    extern CFDictionaryRef __CFLocaleGetPrefs(CFLocaleRef locale);
-    return (id)__CFLocaleGetPrefs((CFLocaleRef)self);
+    // __CFLocaleGetPrefs is an internal, unexported symbol in Darling's CoreFoundation.
+    // Furthermore, calling through CF_OBJC_FUNCDISPATCHV would cause infinite recursion
+    // when __NSCFLocale calls back into [self _prefs].
+    //
+    // Note: __CFLocaleLayout mirrors the exact memory layout of struct __CFLocale defined in
+    // CFLocale.c (CFRuntimeBase + _identifier + _cache + _overrides + _prefs).
+    // If the internal definition of struct __CFLocale changes, this layout must be kept in sync.
+    struct __CFLocaleLayout {
+        uintptr_t _cfisa;
+        uint8_t _cfinfo[4];
+        uint32_t _rc;
+        CFStringRef _identifier;
+        CFMutableDictionaryRef _cache;
+        CFMutableDictionaryRef _overrides;
+        CFDictionaryRef _prefs;
+    };
+    return (id)((struct __CFLocaleLayout *)self)->_prefs;
 }
 
 - (id)initWithLocaleIdentifier:(NSString *)identifier
