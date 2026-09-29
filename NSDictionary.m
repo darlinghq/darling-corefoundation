@@ -1248,7 +1248,10 @@ static NSString *_getDescription(id obj, id locale, int level)
 
 - (void)setObject:(id)obj forKeyedSubscript:(id <NSCopying>)key
 {
-    [self setObject:obj forKey:key];
+    if (obj == nil)
+        [self removeObjectForKey:key];
+    else
+        [self setObject:obj forKey:key];
 }
 
 @end
