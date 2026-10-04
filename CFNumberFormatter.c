@@ -149,13 +149,23 @@ CFNumberFormatterRef CFNumberFormatterCreate(CFAllocatorRef allocator, CFLocaleR
 	CFRelease(memory);
 	return NULL;
     }
-    UChar ubuff[4];
+    UChar ubuff[16];
     if (kCFNumberFormatterNoStyle == style) {
         status = U_ZERO_ERROR;
-	ubuff[0] = '#'; ubuff[1] = ';'; ubuff[2] = '#';
-        __cficu_unum_applyPattern(memory->_nf, false, ubuff, 3, NULL, &status);
+        // "No style" still has to represent the number honestly: the sign and the fractional part are
+        // part of the value, not decoration. The pattern here used to be just "#;#", which contains
+        // neither '.' nor '-', so no fraction could ever be emitted and a negative number was printed
+        // as its bare digits (-2.25 came out as "2"). UNUM_MAX_FRACTION_DIGITS was then pinned to 0,
+        // which removed any precision the pattern did allow. Ungrouped, because no style means no
+        // separators, and capped at three fraction digits to match Foundation's default formatter.
+        ubuff[0] = '#'; ubuff[1] = '0'; ubuff[2] = '.';
+        ubuff[3] = '#'; ubuff[4] = '#'; ubuff[5] = '#';
+        ubuff[6] = ';';
+        ubuff[7] = '-'; ubuff[8] = '#'; ubuff[9] = '0'; ubuff[10] = '.';
+        ubuff[11] = '#'; ubuff[12] = '#'; ubuff[13] = '#';
+        __cficu_unum_applyPattern(memory->_nf, false, ubuff, 14, NULL, &status);
 	__cficu_unum_setAttribute(memory->_nf, UNUM_MAX_INTEGER_DIGITS, 42);
-	__cficu_unum_setAttribute(memory->_nf, UNUM_MAX_FRACTION_DIGITS, 0);
+	__cficu_unum_setAttribute(memory->_nf, UNUM_MAX_FRACTION_DIGITS, 3);
     }
     memory->_locale = locale ? CFLocaleCreateCopy(allocator, locale) : CFLocaleGetSystem();
     __CFNumberFormatterCustomize(memory);
