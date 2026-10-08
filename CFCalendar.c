@@ -147,7 +147,7 @@ CFCalendarRef CFCalendarCreateWithIdentifier(CFAllocatorRef allocator, CFStringR
     __CFGenericValidateType(allocator, CFAllocatorGetTypeID());
     __CFGenericValidateType(identifier, CFStringGetTypeID());
     // return NULL until Chinese calendar is available
-    if (identifier != kCFGregorianCalendar && identifier != kCFBuddhistCalendar && identifier != kCFJapaneseCalendar && identifier != kCFIslamicCalendar && identifier != kCFIslamicCivilCalendar && identifier != kCFHebrewCalendar) {
+    if (identifier != kCFGregorianCalendar && identifier != kCFBuddhistCalendar && identifier != kCFJapaneseCalendar && identifier != kCFIslamicCalendar && identifier != kCFIslamicCivilCalendar && identifier != kCFHebrewCalendar && identifier != kCFISO8601Calendar) {
 //    if (identifier != kCFGregorianCalendar && identifier != kCFBuddhistCalendar && identifier != kCFJapaneseCalendar && identifier != kCFIslamicCalendar && identifier != kCFIslamicCivilCalendar && identifier != kCFHebrewCalendar && identifier != kCFChineseCalendar) {
 	if (CFEqual(kCFGregorianCalendar, identifier)) identifier = kCFGregorianCalendar;
 	else if (CFEqual(kCFBuddhistCalendar, identifier)) identifier = kCFBuddhistCalendar;
@@ -155,6 +155,7 @@ CFCalendarRef CFCalendarCreateWithIdentifier(CFAllocatorRef allocator, CFStringR
 	else if (CFEqual(kCFIslamicCalendar, identifier)) identifier = kCFIslamicCalendar;
 	else if (CFEqual(kCFIslamicCivilCalendar, identifier)) identifier = kCFIslamicCivilCalendar;
 	else if (CFEqual(kCFHebrewCalendar, identifier)) identifier = kCFHebrewCalendar;
+	else if (CFEqual(kCFISO8601Calendar, identifier)) identifier = kCFISO8601Calendar;
 //	else if (CFEqual(kCFChineseCalendar, identifier)) identifier = kCFChineseCalendar;
 	else return NULL;
     }
