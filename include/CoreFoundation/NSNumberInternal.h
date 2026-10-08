@@ -30,7 +30,7 @@ __attribute__((visibility("hidden")))
 - (unsigned short)unsignedShortValue;
 - (short)shortValue;
 - (unsigned char)unsignedCharValue;
-- (BOOL)charValue;
+- (char)charValue;
 - (const char *)objCType;
 - (void)getValue:(void *)value;
 - (id)copyWithZone:(NSZone *)zone;
@@ -75,7 +75,7 @@ __attribute__((visibility("hidden")))
 - (unsigned short)unsignedShortValue;
 - (short)shortValue;
 - (unsigned char)unsignedCharValue;
-- (BOOL)charValue;
+- (char)charValue;
 - (id)stringValue;
 - (id)description;
 - (id)descriptionWithLocale:(id)locale;

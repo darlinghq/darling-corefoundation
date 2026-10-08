@@ -203,7 +203,7 @@ CF_PRIVATE
     return GET_VALUE(unsigned char, kCFNumberCharType);
 }
 
-- (BOOL)charValue
+- (char)charValue
 {
     return GET_VALUE(unsigned char, kCFNumberCharType);
 }
@@ -570,7 +570,7 @@ SINGLETON_RR()
     return (CFBooleanRef)self == kCFBooleanTrue;
 }
 
-- (BOOL)charValue
+- (char)charValue
 {
     return (CFBooleanRef)self == kCFBooleanTrue;
 }
