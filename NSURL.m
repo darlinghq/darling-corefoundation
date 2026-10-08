@@ -197,6 +197,7 @@ static Boolean CFURLStat(CFURLRef url, struct stat *info) {
 @protocol CFURLUTType <NSObject>
 + (id)typeWithFilenameExtension:(NSString *)filenameExtension conformingToType:(id)supertype;
 - (BOOL)isDeclared;
+- (NSString *)identifier;
 @end
 
 static Class<CFURLUTType> UTTypeClass;
@@ -464,43 +465,12 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
     else if (CFEqual(key, kCFURLTypeIdentifierKey))
     {
         // Key for the resource’s uniform type identifier (UTI), returned as a CFString object.
-        static dispatch_once_t pred;
-        static void* LaunchServicesHandle;
-        static CFErrorRef LaunchServicesHandleError;
-
-        dispatch_once(&pred, ^{
-            LaunchServicesHandle = dlopen("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/LaunchServices", RTLD_LAZY | RTLD_LOCAL);
-            if(LaunchServicesHandle == NULL)
-                dlError(&LaunchServicesHandleError);
-            });
-
-        if(LaunchServicesHandle == NULL){
-            if (error != NULL)
-                *error = CFRetain(LaunchServicesHandleError);
-            return NULL;
+        CFTypeRef type = CFURLCreateContentType(url, error);
+        if (type != NULL)
+        {
+            value = CFRetain([(id<CFURLUTType>)type identifier]);
+            CFRelease(type);
         }
-
-        static CFStringRef (*UTTypeCreatePreferredIdentifierForTag)(CFStringRef, CFStringRef, _Nullable CFStringRef);
-        static CFStringRef *tagType;
-        static dispatch_once_t dlsym_pred;
-
-        dispatch_once(&dlsym_pred, ^{
-            UTTypeCreatePreferredIdentifierForTag = dlsym(LaunchServicesHandle, "UTTypeCreatePreferredIdentifierForTag");
-            tagType = dlsym(LaunchServicesHandle, "kUTTagClassFilenameExtension");
-            if(UTTypeCreatePreferredIdentifierForTag == NULL || tagType == NULL)
-                dlError(&LaunchServicesHandleError);
-        });
-
-        if(UTTypeCreatePreferredIdentifierForTag == NULL || tagType == NULL){
-            if (error != NULL)
-                *error = CFRetain(LaunchServicesHandleError);
-            return NULL;
-        }
-        
-        CFStringRef extension = CFURLCopyPathExtension(url);
-        value = UTTypeCreatePreferredIdentifierForTag(*tagType, extension, NULL); 
-
-        CFRelease(extension);
     }
     else if (CFEqual(key, (CFStringRef)NSURLContentTypeKey))
     {
