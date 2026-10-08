@@ -527,7 +527,7 @@ US Locale Fiscal Quarters:
 
 - (void)setGregorianStartDate:(NSDate *)date
 {
-    CFCalendarSetGregorianStartDate((CFCalendarRef)self, (CFDateRef)self);
+    CFCalendarSetGregorianStartDate((CFCalendarRef)self, (CFDateRef)date);
 }
 
 - (void)setMinimumDaysInFirstWeek:(NSUInteger)mdw
