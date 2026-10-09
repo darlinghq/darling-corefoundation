@@ -17,6 +17,14 @@ static void check_key_copied(const char *label, NSDictionary *dict, NSMutableStr
         && [[[dict allKeys] firstObject] isEqualToString:@"original"]);
 }
 
+// Source dictionary that retains (does not copy) its keys, so the receiver must do the copy.
+static NSDictionary *non_copying_dictionary(id key, id value)
+{
+    CFMutableDictionaryRef d = CFDictionaryCreateMutable(kCFAllocatorDefault, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFDictionarySetValue(d, (__bridge const void *)key, (__bridge const void *)value);
+    return CFBridgingRelease(d);
+}
+
 int main(void)
 {
     @autoreleasepool
@@ -38,7 +46,7 @@ int main(void)
         check_key_copied("literal", d, key);
 
         key = [NSMutableString stringWithString:@"original"];
-        NSDictionary *src = [NSDictionary dictionaryWithObject:@1 forKey:key];
+        NSDictionary *src = non_copying_dictionary(key, @1);
         d = [[NSDictionary alloc] initWithDictionary:src];
         check_key_copied("initWithDictionary:", d, key);
 
@@ -59,7 +67,7 @@ int main(void)
 
         key = [NSMutableString stringWithString:@"original"];
         m = [NSMutableDictionary dictionary];
-        [m addEntriesFromDictionary:[NSDictionary dictionaryWithObject:@1 forKey:key]];
+        [m addEntriesFromDictionary:non_copying_dictionary(key, @1)];
         check_key_copied("addEntriesFromDictionary:", m, key);
 
         key = [NSMutableString stringWithString:@"original"];

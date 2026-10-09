@@ -203,11 +203,11 @@ static CFDictionaryValueCallBacks sNSCFDictionaryValueCallBacks = {
     &_NSCFEqual
 };
 
-static id sNSDictionaryCopyKey(id key)
+static id sNSDictionaryCopyKey(id key, SEL entryPoint)
 {
     if (![key respondsToSelector:@selector(copyWithZone:)])
     {
-        [NSException raise:NSInvalidArgumentException format:@"-[NSDictionary setObject:forKey:]: key of class %@ does not conform to NSCopying", [key class]];
+        [NSException raise:NSInvalidArgumentException format:@"-[NSDictionary %@]: key of class %@ does not conform to NSCopying", NSStringFromSelector(entryPoint), [key class]];
     }
     return [key copy];
 }
@@ -347,12 +347,18 @@ SINGLETON_RR()
     }
 
     id *copies = cnt ? malloc(sizeof(id) * cnt) : NULL;
+    if (cnt != 0 && copies == NULL)
+    {
+        [self release];
+        [NSException raise:NSMallocException format:@"Unable to allocate %lu keys for dictionary", (unsigned long)cnt];
+        return nil;
+    }
     NSUInteger copied = 0;
     @try
     {
         for (; copied < cnt; copied++)
         {
-            copies[copied] = sNSDictionaryCopyKey(keys[copied]);
+            copies[copied] = sNSDictionaryCopyKey(keys[copied], _cmd);
         }
     }
     @catch (id e)
@@ -1300,11 +1306,17 @@ static NSString *_getDescription(id obj, id locale, int level)
             return;
         }
 
-        id keyCopy = sNSDictionaryCopyKey(key);
-        [self willChangeValueForKey:key];
-        CFDictionarySetValue((CFMutableDictionaryRef)self, (const void *)keyCopy, (const void *)obj);
-        [self didChangeValueForKey:key];
-        [keyCopy release];
+        id keyCopy = sNSDictionaryCopyKey(key, _cmd);
+        @try
+        {
+            [self willChangeValueForKey:key];
+            CFDictionarySetValue((CFMutableDictionaryRef)self, (const void *)keyCopy, (const void *)obj);
+            [self didChangeValueForKey:key];
+        }
+        @finally
+        {
+            [keyCopy release];
+        }
     }
     else
     {
