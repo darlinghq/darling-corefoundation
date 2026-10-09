@@ -17,22 +17,23 @@ extern CFDateRef CFCalendarCopyGregorianStartDate(CFCalendarRef calendar);
 extern Boolean _CFCalendarDecomposeAbsoluteTimeV(CFCalendarRef calendar, CFAbsoluteTime at, const char *componentDesc, int **componentVector, int count);
 extern Boolean _CFCalendarGetComponentDifferenceV(CFCalendarRef calendar, CFAbsoluteTime startingAT, CFAbsoluteTime resultAT, CFOptionFlags options, const char *componentDesc, int **vector, int count);
 
-const NSCalendarIdentifier NSCalendarIdentifierGregorian = @"NSCalendarIdentifierGregorian";
-const NSCalendarIdentifier NSCalendarIdentifierISO8601 = @"NSCalendarIdentifierISO8601";
-const NSCalendarIdentifier NSCalendarIdentifierBuddhist = @"NSCalendarIdentifierBuddhist";
-const NSCalendarIdentifier NSCalendarIdentifierChinese = @"NSCalendarIdentifierChinese";
-const NSCalendarIdentifier NSCalendarIdentifierCoptic = @"NSCalendarIdentifierCoptic";
-const NSCalendarIdentifier NSCalendarIdentifierEthiopicAmeteAlem = @"NSCalendarIdentifierEthiopicAmeteAlem";
-const NSCalendarIdentifier NSCalendarIdentifierEthiopicAmeteMihret = @"NSCalendarIdentifierEthiopicAmeteMihret";
-const NSCalendarIdentifier NSCalendarIdentifierHebrew = @"NSCalendarIdentifierHebrew";
-const NSCalendarIdentifier NSCalendarIdentifierIndian = @"NSCalendarIdentifierIndian";
-const NSCalendarIdentifier NSCalendarIdentifierIslamic = @"NSCalendarIdentifierIslamic";
-const NSCalendarIdentifier NSCalendarIdentifierIslamicCivil = @"NSCalendarIdentifierIslamicCivil";
-const NSCalendarIdentifier NSCalendarIdentifierIslamicTabular = @"NSCalendarIdentifierIslamicTabular";
-const NSCalendarIdentifier NSCalendarIdentifierIslamicUmmAlQura = @"NSCalendarIdentifierIslamicUmmAlQura";
-const NSCalendarIdentifier NSCalendarIdentifierJapanese = @"NSCalendarIdentifierJapanese";
-const NSCalendarIdentifier NSCalendarIdentifierPersian = @"NSCalendarIdentifierPersian";
-const NSCalendarIdentifier NSCalendarIdentifierRepublicOfChina = @"NSCalendarIdentifierRepublicOfChina";
+// Values equal the toll-free kCFCalendarIdentifier* strings that CFCalendarCreateWithIdentifier accepts.
+const NSCalendarIdentifier NSCalendarIdentifierGregorian = @"gregorian";
+const NSCalendarIdentifier NSCalendarIdentifierISO8601 = @"iso8601";
+const NSCalendarIdentifier NSCalendarIdentifierBuddhist = @"buddhist";
+const NSCalendarIdentifier NSCalendarIdentifierChinese = @"chinese";
+const NSCalendarIdentifier NSCalendarIdentifierCoptic = @"coptic";
+const NSCalendarIdentifier NSCalendarIdentifierEthiopicAmeteAlem = @"ethiopic-amete-alem";
+const NSCalendarIdentifier NSCalendarIdentifierEthiopicAmeteMihret = @"ethiopic";
+const NSCalendarIdentifier NSCalendarIdentifierHebrew = @"hebrew";
+const NSCalendarIdentifier NSCalendarIdentifierIndian = @"indian";
+const NSCalendarIdentifier NSCalendarIdentifierIslamic = @"islamic";
+const NSCalendarIdentifier NSCalendarIdentifierIslamicCivil = @"islamic-civil";
+const NSCalendarIdentifier NSCalendarIdentifierIslamicTabular = @"islamic-tbla";
+const NSCalendarIdentifier NSCalendarIdentifierIslamicUmmAlQura = @"islamic-umalqura";
+const NSCalendarIdentifier NSCalendarIdentifierJapanese = @"japanese";
+const NSCalendarIdentifier NSCalendarIdentifierPersian = @"persian";
+const NSCalendarIdentifier NSCalendarIdentifierRepublicOfChina = @"roc";
 
 
 @implementation NSCalendar
