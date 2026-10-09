@@ -73,6 +73,7 @@ static CFDictionaryRef _CFBundleCopyLocTableStrings(CFBundleRef bundle, CFString
 CF_EXPORT CFDictionaryRef _CFBundleCopyStringTableForLocalization(CFBundleRef bundle, CFStringRef tableName, CFStringRef localizationName) {
     CFDictionaryRef stringTable = NULL;
     CFURLRef tableURL = NULL;
+    if (!tableName || CFEqual(tableName, CFSTR(""))) tableName = _CFBundleDefaultStringTableName;
     if (localizationName) {
         tableURL = CFBundleCopyResourceURLForLocalization(bundle, tableName, _CFBundleStringTableType, NULL, localizationName);
     } else {

@@ -4,6 +4,7 @@
 #include <sys/stat.h>
 
 CF_EXPORT CFStringRef CFBundleCopyLocalizedStringForLocalization(CFBundleRef, CFStringRef, CFStringRef, CFStringRef, CFStringRef);
+CF_EXPORT CFDictionaryRef _CFBundleCopyStringTableForLocalization(CFBundleRef, CFStringRef, CFStringRef);
 
 static int failures;
 
@@ -55,6 +56,7 @@ int main(void) {
         expect("non-string entry returns key", [(NSString *)CFBundleCopyLocalizedString(bundle, CFSTR("PLURAL"), NULL, NULL) autorelease], @"PLURAL");
         expect(".strings table takes precedence", [(NSString *)CFBundleCopyLocalizedString(bundle, CFSTR("SOURCE"), NULL, CFSTR("Other")) autorelease], @"strings");
         expect("NSBundle lookup", [[NSBundle bundleWithPath:bundlePath] localizedStringForKey:@"GREETING" value:nil table:nil], @"Hello");
+        expect("table loader, NULL name", [(NSDictionary *)_CFBundleCopyStringTableForLocalization(bundle, NULL, CFSTR("de")) autorelease][@"GREETING"], @"Hallo");
 
         CFRelease(bundle);
         [[NSFileManager defaultManager] removeItemAtPath:root error:NULL];
