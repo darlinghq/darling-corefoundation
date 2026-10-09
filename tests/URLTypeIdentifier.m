@@ -39,6 +39,10 @@ int main(void)
         check_identifier([NSURL fileURLWithPath:root isDirectory:YES], "directory without extension", @"public.folder");
         check_identifier([NSURL fileURLWithPath:file], "regular file with extension", @"public.plain-text");
 
+        NSString *bare = [root stringByAppendingPathComponent:@"bare"];
+        [@"x" writeToFile:bare atomically:NO encoding:NSUTF8StringEncoding error:nil];
+        check_identifier([NSURL fileURLWithPath:bare], "extensionless regular file", @"public.data");
+
         id contentType = nil;
         [[NSURL fileURLWithPath:file] getResourceValue:&contentType forKey:NSURLContentTypeKey error:nil];
         id identifier = nil;
