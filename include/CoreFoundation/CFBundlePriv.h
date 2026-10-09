@@ -206,6 +206,9 @@ CFStringRef CFBundleCopyLocalizationForLocalizationInfo(SInt32 languageCode, SIn
 // Get a localized string for a specific localization (including processing as strings dict file). This skips the usual cache for localized strings.
 CF_EXPORT CFStringRef CFBundleCopyLocalizedStringForLocalization(CFBundleRef bundle, CFStringRef key, CFStringRef value, CFStringRef tableName, CFStringRef localizationName) CF_AVAILABLE(10_10, 8_0);
 
+// Darling: the <tableName>.strings table, else that table's .loctable entry, for one localization (NULL: the bundle's language search list). NULL when neither exists.
+CF_EXPORT CFDictionaryRef _CFBundleCopyStringTableForLocalization(CFBundleRef bundle, CFStringRef tableName, CFStringRef localizationName);
+
 CF_EXPORT
 void _CFBundleSetDefaultLocalization(CFStringRef localizationName);
 

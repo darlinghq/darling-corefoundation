@@ -70,6 +70,40 @@ static CFDictionaryRef _CFBundleCopyLocTableStrings(CFBundleRef bundle, CFString
     return result;
 }
 
+CF_EXPORT CFDictionaryRef _CFBundleCopyStringTableForLocalization(CFBundleRef bundle, CFStringRef tableName, CFStringRef localizationName) {
+    CFDictionaryRef stringTable = NULL;
+    CFURLRef tableURL = NULL;
+    if (localizationName) {
+        tableURL = CFBundleCopyResourceURLForLocalization(bundle, tableName, _CFBundleStringTableType, NULL, localizationName);
+    } else {
+        tableURL = CFBundleCopyResourceURL(bundle, tableName, _CFBundleStringTableType, NULL);
+    }
+
+    if (tableURL) {
+        CFDataRef tableData = NULL;
+        SInt32 errCode;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated"
+        if (CFURLCreateDataAndPropertiesFromResource(kCFAllocatorSystemDefault, tableURL, &tableData, NULL, NULL, &errCode)) {
+#pragma GCC diagnostic pop
+            CFErrorRef error = NULL;
+            stringTable = (CFDictionaryRef)CFPropertyListCreateWithData(CFGetAllocator(bundle), tableData, kCFPropertyListImmutable, NULL, &error);
+            if (stringTable && CFDictionaryGetTypeID() != CFGetTypeID(stringTable)) {
+                CFRelease(stringTable);
+                stringTable = NULL;
+            }
+            if (!stringTable && error) {
+                CFLog(kCFLogLevelError, CFSTR("Unable to load string table file: %@ / %@: %@"), bundle, tableName, error);
+                CFRelease(error);
+            }
+            CFRelease(tableData);
+        }
+        CFRelease(tableURL);
+    }
+    if (!stringTable) stringTable = _CFBundleCopyLocTableStrings(bundle, tableName, localizationName);
+    return stringTable;
+}
+
 
 CF_EXPORT CFStringRef CFBundleCopyLocalizedString(CFBundleRef bundle, CFStringRef key, CFStringRef value, CFStringRef tableName) {
     return CFBundleCopyLocalizedStringForLocalization(bundle, key, value, tableName, NULL);
@@ -97,41 +131,7 @@ CF_EXPORT CFStringRef CFBundleCopyLocalizedStringForLocalization(CFBundleRef bun
         // Go load the table. First, unlock so we don't hold the lock across file system access.
         __CFUnlock(&bundle->_lock);
         
-        CFURLRef tableURL = NULL;
-        if (localizationName) {
-            tableURL = CFBundleCopyResourceURLForLocalization(bundle, tableName, _CFBundleStringTableType, NULL, localizationName);
-        } else {
-            tableURL = CFBundleCopyResourceURL(bundle, tableName, _CFBundleStringTableType, NULL);
-        }
-        
-        if (tableURL) {
-            CFStringRef nameForSharing = NULL;
-            if (!stringTable) {
-                CFDataRef tableData = NULL;
-                SInt32 errCode;
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated"
-                if (CFURLCreateDataAndPropertiesFromResource(kCFAllocatorSystemDefault, tableURL, &tableData, NULL, NULL, &errCode)) {
-#pragma GCC diagnostic pop
-                    CFErrorRef error = NULL;
-                    stringTable = (CFDictionaryRef)CFPropertyListCreateWithData(CFGetAllocator(bundle), tableData, kCFPropertyListImmutable, NULL, &error);
-                    if (stringTable && CFDictionaryGetTypeID() != CFGetTypeID(stringTable)) {
-                        CFRelease(stringTable);
-                        stringTable = NULL;
-                    }
-                    if (!stringTable && error) {
-                        CFLog(kCFLogLevelError, CFSTR("Unable to load string table file: %@ / %@: %@"), bundle, tableName, error);
-                        CFRelease(error);
-                        error = NULL;
-                    }
-                    CFRelease(tableData);
-                    
-                }
-            }
-            if (nameForSharing) CFRelease(nameForSharing);
-            if (tableURL) CFRelease(tableURL);
-        }
-        if (!stringTable) stringTable = _CFBundleCopyLocTableStrings(bundle, tableName, localizationName);
+        stringTable = _CFBundleCopyStringTableForLocalization(bundle, tableName, localizationName);
         if (!stringTable) stringTable = CFDictionaryCreate(CFGetAllocator(bundle), NULL, NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
         
         if ((!CFStringHasSuffix(tableName, CFSTR(".nocache")) || !_CFExecutableLinkedOnOrAfter(CFSystemVersionLeopard)) && localizationName == NULL) {
