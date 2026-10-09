@@ -141,32 +141,38 @@ NSString *const NSURLVolumeSupportsCompressionKey = @"NSURLVolumeSupportsCompres
 
 NSURLUbiquitousItemDownloadingStatus const NSURLUbiquitousItemDownloadingStatusNotDownloaded = @"NSURLUbiquitousItemDownloadingStatusNotDownloaded";
 
+// kCFErrorUnderlyingErrorKey values must be CFErrors: CFError's description reads them as such.
 static void posixError(CFErrorRef *error) {
+    int saved_errno = errno;
     const CFStringRef keys[1] = {
         kCFErrorUnderlyingErrorKey,
     };
-    CFStringRef err = CFStringCreateWithFormat(kCFAllocatorDefault, NULL, CFSTR("%s"), strerror(errno));
+    CFErrorRef underlyingError = CFErrorCreate(kCFAllocatorDefault, kCFErrorDomainPOSIX, saved_errno, NULL);
     CFTypeRef values[1] = {
-        err,
+        underlyingError,
     };
 
     if (error != NULL)
     {
-        *error = CFErrorCreateWithUserInfoKeysAndValues(kCFAllocatorDefault, kCFErrorDomainPOSIX, errno, (const void *const *)keys, (const void *const *)values, 1);
+        *error = CFErrorCreateWithUserInfoKeysAndValues(kCFAllocatorDefault, kCFErrorDomainPOSIX, saved_errno, (const void *const *)keys, (const void *const *)values, 1);
     }
 
-    CFRelease(err);
+    CFRelease(underlyingError);
 }
 
 static void dlError(CFErrorRef *error) {
     int saved_errno = errno;
+    const CFStringRef descriptionKey = kCFErrorLocalizedDescriptionKey;
+    CFStringRef description = CFStringCreateWithCString(kCFAllocatorDefault, dlerror(), kCFStringEncodingUTF8);
+    CFTypeRef descriptionValue = description;
+    CFErrorRef underlyingError = CFErrorCreateWithUserInfoKeysAndValues(kCFAllocatorDefault, kCFErrorDomainPOSIX, saved_errno, (const void *const *) &descriptionKey, (const void *const *) &descriptionValue, 1);
     const CFStringRef key = kCFErrorUnderlyingErrorKey;
-    CFStringRef underlyingError = CFStringCreateWithCString(kCFAllocatorDefault, dlerror(), kCFStringEncodingUTF8);
     CFTypeRef value = underlyingError;
-    
+
     if(error != NULL)
-        *error = CFErrorCreateWithUserInfoKeysAndValues(kCFAllocatorDefault, kCFErrorDomainPOSIX, saved_errno, (const void *const *) &key, (const void *const *) &value, 1); 
+        *error = CFErrorCreateWithUserInfoKeysAndValues(kCFAllocatorDefault, kCFErrorDomainPOSIX, saved_errno, (const void *const *) &key, (const void *const *) &value, 1);
     CFRelease(underlyingError);
+    CFRelease(description);
 };
 
 static Boolean CFURLStat(CFURLRef url, struct stat *info) {
