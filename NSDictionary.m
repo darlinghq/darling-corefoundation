@@ -207,7 +207,7 @@ static id sNSDictionaryCopyKey(id key, SEL entryPoint)
 {
     if (![key respondsToSelector:@selector(copyWithZone:)])
     {
-        [NSException raise:NSInvalidArgumentException format:@"-[NSDictionary %@]: key of class %@ does not conform to NSCopying", NSStringFromSelector(entryPoint), [key class]];
+        [NSException raise:NSInvalidArgumentException format:@"-[NSDictionary %s]: key of class %s does not conform to NSCopying", sel_getName(entryPoint), class_getName([key class])];
     }
     return [key copy];
 }
