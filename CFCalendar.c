@@ -31,6 +31,7 @@
 #include <CoreFoundation/CFRuntime.h>
 #include "CFInternal.h"
 #include "CFPriv.h"
+#include "CFLocaleInternal.h"
 #include <unicode/ucal.h>
 
 #define BUFFER_SIZE 512
@@ -146,19 +147,28 @@ CFCalendarRef CFCalendarCreateWithIdentifier(CFAllocatorRef allocator, CFStringR
     if (allocator == NULL) allocator = __CFGetDefaultAllocator();
     __CFGenericValidateType(allocator, CFAllocatorGetTypeID());
     __CFGenericValidateType(identifier, CFStringGetTypeID());
-    // return NULL until Chinese calendar is available
-    if (identifier != kCFGregorianCalendar && identifier != kCFBuddhistCalendar && identifier != kCFJapaneseCalendar && identifier != kCFIslamicCalendar && identifier != kCFIslamicCivilCalendar && identifier != kCFHebrewCalendar && identifier != kCFISO8601Calendar) {
-//    if (identifier != kCFGregorianCalendar && identifier != kCFBuddhistCalendar && identifier != kCFJapaneseCalendar && identifier != kCFIslamicCalendar && identifier != kCFIslamicCivilCalendar && identifier != kCFHebrewCalendar && identifier != kCFChineseCalendar) {
-	if (CFEqual(kCFGregorianCalendar, identifier)) identifier = kCFGregorianCalendar;
-	else if (CFEqual(kCFBuddhistCalendar, identifier)) identifier = kCFBuddhistCalendar;
-	else if (CFEqual(kCFJapaneseCalendar, identifier)) identifier = kCFJapaneseCalendar;
-	else if (CFEqual(kCFIslamicCalendar, identifier)) identifier = kCFIslamicCalendar;
-	else if (CFEqual(kCFIslamicCivilCalendar, identifier)) identifier = kCFIslamicCivilCalendar;
-	else if (CFEqual(kCFHebrewCalendar, identifier)) identifier = kCFHebrewCalendar;
-	else if (CFEqual(kCFISO8601Calendar, identifier)) identifier = kCFISO8601Calendar;
-//	else if (CFEqual(kCFChineseCalendar, identifier)) identifier = kCFChineseCalendar;
-	else return NULL;
-    }
+    CFStringRef canonicalIdent = NULL;
+    if (CFEqual(kCFCalendarIdentifierGregorian, identifier)) canonicalIdent = kCFCalendarIdentifierGregorian;
+    else if (CFEqual(kCFCalendarIdentifierBuddhist, identifier)) canonicalIdent = kCFCalendarIdentifierBuddhist;
+    else if (CFEqual(kCFCalendarIdentifierJapanese, identifier)) canonicalIdent = kCFCalendarIdentifierJapanese;
+    else if (CFEqual(kCFCalendarIdentifierIslamic, identifier)) canonicalIdent = kCFCalendarIdentifierIslamic;
+    else if (CFEqual(kCFCalendarIdentifierIslamicCivil, identifier)) canonicalIdent = kCFCalendarIdentifierIslamicCivil;
+    else if (CFEqual(kCFCalendarIdentifierHebrew, identifier)) canonicalIdent = kCFCalendarIdentifierHebrew;
+    else if (CFEqual(kCFCalendarIdentifierChinese, identifier)) canonicalIdent = kCFCalendarIdentifierChinese;
+    else if (CFEqual(kCFCalendarIdentifierRepublicOfChina, identifier)) canonicalIdent = kCFCalendarIdentifierRepublicOfChina;
+    else if (CFEqual(kCFCalendarIdentifierPersian, identifier)) canonicalIdent = kCFCalendarIdentifierPersian;
+    else if (CFEqual(kCFCalendarIdentifierIndian, identifier)) canonicalIdent = kCFCalendarIdentifierIndian;
+    else if (CFEqual(kCFCalendarIdentifierISO8601, identifier)) canonicalIdent = kCFCalendarIdentifierISO8601;
+    else if (CFEqual(kCFCalendarIdentifierCoptic, identifier)) canonicalIdent = kCFCalendarIdentifierCoptic;
+    else if (CFEqual(kCFCalendarIdentifierEthiopicAmeteMihret, identifier)) canonicalIdent = kCFCalendarIdentifierEthiopicAmeteMihret;
+    else if (CFEqual(kCFCalendarIdentifierEthiopicAmeteAlem, identifier)) canonicalIdent = kCFCalendarIdentifierEthiopicAmeteAlem;
+    else if (CFEqual(kCFCalendarIdentifierIslamicTabular, identifier)) canonicalIdent = kCFCalendarIdentifierIslamicTabular;
+    else if (CFEqual(kCFCalendarIdentifierIslamicUmmAlQura, identifier)) canonicalIdent = kCFCalendarIdentifierIslamicUmmAlQura;
+
+    if (!canonicalIdent)
+        return NULL;
+
+    identifier = canonicalIdent;
     struct __CFCalendar *calendar = NULL;
     uint32_t size = sizeof(struct __CFCalendar) - sizeof(CFRuntimeBase);
     calendar = (struct __CFCalendar *)_CFRuntimeCreateInstance(allocator, CFCalendarGetTypeID(), size, NULL);

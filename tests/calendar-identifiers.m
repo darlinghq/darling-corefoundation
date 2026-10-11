@@ -20,9 +20,17 @@ int main(void) {
     checkIdentifier(@"Islamic", NSCalendarIdentifierIslamic);
     checkIdentifier(@"IslamicCivil", NSCalendarIdentifierIslamicCivil);
     checkIdentifier(@"Japanese", NSCalendarIdentifierJapanese);
-    // The other identifiers still return nil: CFCalendarCreateWithIdentifier only creates these calendars
-    // (and iso8601, covered by calendar-iso8601.m, not asserted here).
+    checkIdentifier(@"Chinese", NSCalendarIdentifierChinese);
+    checkIdentifier(@"Coptic", NSCalendarIdentifierCoptic);
+    checkIdentifier(@"EthiopicAmeteMihret", NSCalendarIdentifierEthiopicAmeteMihret);
+    checkIdentifier(@"EthiopicAmeteAlem", NSCalendarIdentifierEthiopicAmeteAlem);
+    checkIdentifier(@"Indian", NSCalendarIdentifierIndian);
+    checkIdentifier(@"Persian", NSCalendarIdentifierPersian);
+    checkIdentifier(@"RepublicOfChina", NSCalendarIdentifierRepublicOfChina);
+    checkIdentifier(@"IslamicTabular", NSCalendarIdentifierIslamicTabular);
+    checkIdentifier(@"IslamicUmmAlQura", NSCalendarIdentifierIslamicUmmAlQura);
+    checkIdentifier(@"ISO8601", NSCalendarIdentifierISO8601);
     [pool drain];
-    puts("PASS: each of the six calendars CoreFoundation supports creates a calendar and round-trips");
+    puts("PASS: all sixteen calendar identifiers create a calendar and round-trip");
     return 0;
 }
