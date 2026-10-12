@@ -986,6 +986,15 @@ static NSString *_getDescription(id obj, id locale, int level)
     return success;
 }
 
+- (BOOL)writeToURL:(NSURL *)url error:(NSError **)error
+{
+    BOOL success = [self writeToURL:url atomically:YES];
+    if (!success && error != NULL) {
+        *error = [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileWriteUnknownError userInfo:nil];
+    }
+    return success;
+}
+
 - (NSArray *)keysSortedByValueUsingSelector:(SEL)comparator
 {
     return [[self allKeys] sortedArrayUsingComparator:^NSComparisonResult(id obj1, id obj2) {

@@ -1232,6 +1232,15 @@ SINGLETON_RR()
     return success;
 }
 
+- (BOOL)writeToURL:(NSURL *)url error:(NSError **)error
+{
+    BOOL success = [self writeToURL:url atomically:YES];
+    if (!success && error != NULL) {
+        *error = [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileWriteUnknownError userInfo:nil];
+    }
+    return success;
+}
+
 - (void)makeObjectsPerformSelector:(SEL)sel
 {
     [self makeObjectsPerformSelector:sel withObject:nil];
