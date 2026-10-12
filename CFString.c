@@ -6572,3 +6572,24 @@ void CFShowStr(CFStringRef str) {
 #undef HANGUL_TCOUNT
 #undef HANGUL_NCOUNT
 
+
+/* Darling has no locale hyphenation dictionaries. Advertise that capability
+ * truthfully instead of leaving the macOS APIs absent (which aborts callers
+ * at lazy symbol binding). Ordinary line wrapping remains available. */
+Boolean CFStringIsHyphenationAvailableForLocale(CFLocaleRef locale) {
+    (void)locale;
+    return false;
+}
+
+CFIndex CFStringGetHyphenationLocationBeforeIndex(CFStringRef string,
+        CFIndex location, CFRange limitRange, CFOptionFlags options,
+        CFLocaleRef locale, UTF32Char *character) {
+    (void)string;
+    (void)location;
+    (void)limitRange;
+    (void)options;
+    (void)locale;
+    if (character != NULL)
+        *character = 0;
+    return kCFNotFound;
+}
