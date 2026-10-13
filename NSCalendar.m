@@ -211,6 +211,20 @@ static int makeCFCalendarComponentsVector(NSUInteger unitFlags, int *componentVe
     {
         format[count++] = 'M';
     }
+    // Differences are taken in format order, so week units must precede
+    // day or the day count absorbs them. Keep in sync with componentsFromVector.
+    if ((unitFlags & NSCalendarUnitYearForWeekOfYear) != 0)
+    {
+        format[count++] = 'Y';
+    }
+    if ((unitFlags & NSCalendarUnitWeekOfYear) != 0)
+    {
+        format[count++] = 'w';
+    }
+    if ((unitFlags & NSCalendarUnitWeekOfMonth) != 0)
+    {
+        format[count++] = 'W';
+    }
     if ((unitFlags & NSCalendarUnitDay) != 0)
     {
         format[count++] = 'd';
@@ -230,18 +244,6 @@ static int makeCFCalendarComponentsVector(NSUInteger unitFlags, int *componentVe
     if ((unitFlags & NSCalendarUnitNanosecond) != 0)
     {
         format[count++] = 'S';
-    }
-    if ((unitFlags & NSCalendarUnitWeekOfYear) != 0)
-    {
-        format[count++] = 'w';
-    }
-    if ((unitFlags & NSCalendarUnitWeekOfMonth) != 0)
-    {
-        format[count++] = 'W';
-    }
-    if ((unitFlags & NSCalendarUnitYearForWeekOfYear) != 0)
-    {
-        format[count++] = 'Y';
     }
     if ((unitFlags & NSCalendarUnitWeekday) != 0)
     {
@@ -283,6 +285,18 @@ static NSDateComponents *componentsFromVector(NSCalendar *self, NSUInteger unitF
         {
             [comps setMonth:month];
         }
+    }
+    if ((unitFlags & NSCalendarUnitYearForWeekOfYear) != 0)
+    {
+        [comps setYearForWeekOfYear:componentVector[count++]];
+    }
+    if ((unitFlags & NSCalendarUnitWeekOfYear) != 0)
+    {
+        [comps setWeekOfYear:componentVector[count++]];
+    }
+    if ((unitFlags & NSCalendarUnitWeekOfMonth) != 0)
+    {
+        [comps setWeekOfMonth:componentVector[count++]];
     }
     if ((unitFlags & NSCalendarUnitDay) != 0)
     {
@@ -353,18 +367,6 @@ US Locale Fiscal Quarters:
     if ((unitFlags & NSCalendarUnitNanosecond) != 0)
     {
         [comps setNanosecond:NSEC_PER_MSEC * componentVector[count++]];
-    }
-    if ((unitFlags & NSCalendarUnitWeekOfYear) != 0)
-    {
-        [comps setWeekOfYear:componentVector[count++]];
-    }
-    if ((unitFlags & NSCalendarUnitWeekOfMonth) != 0)
-    {
-        [comps setWeekOfMonth:componentVector[count++]];
-    }
-    if ((unitFlags & NSCalendarUnitYearForWeekOfYear) != 0)
-    {
-        [comps setYearForWeekOfYear:componentVector[count++]];
     }
     if ((unitFlags & NSCalendarUnitWeekday) != 0)
     {
