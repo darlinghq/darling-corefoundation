@@ -1271,23 +1271,32 @@ SINGLETON_RR()
 {
     NSUInteger count = [indices count];
     id *objects = NULL;
+    NSUInteger idx = 0;
     if (count > 0)
     {
-        objects = malloc(sizeof(id) * count);
+        objects = calloc(count, sizeof(id));
         if (UNLIKELY(objects == NULL))
         {
             return nil;
         }
         NSUInteger currentIndex = [indices firstIndex];
-        NSUInteger idx = 0;
+        NSUInteger totalCount = [self count];
         while (currentIndex != NSNotFound && idx < count) // idx check only here for buffer overrun prevention
         {
+            if (currentIndex >= totalCount)
+            {
+                free(objects);
+                [NSException raise:NSRangeException
+                            format:@"-[%@ objectsAtIndexes:]: index %lu beyond bounds [0..%lu]",
+                                   [self class], (unsigned long)currentIndex,
+                                   (unsigned long)(totalCount ? totalCount - 1 : 0)];
+            }
             objects[idx] = [self objectAtIndex:currentIndex];
             currentIndex = [indices indexGreaterThanIndex:currentIndex];
             idx++;
         }
     }
-    NSArray *array = [[NSArray alloc] initWithObjects:objects count:count];
+    NSArray *array = [[NSArray alloc] initWithObjects:objects count:idx];
     if (objects != NULL)
     {
         free(objects);
