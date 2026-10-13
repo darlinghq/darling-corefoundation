@@ -337,8 +337,12 @@ static UCalendarDateFields __CFCalendarGetICUFieldCodeFromChar(char ch) {
     return (UCalendarDateFields)-1;
 }
 
+// Missing from this CF's CFCalendar.h; same value as NSCalendarUnitNanosecond and newer CF's kCFCalendarUnitNanosecond.
+#define __kCFCalendarUnitNanosecond ((CFCalendarUnit)(1UL << 15))
+
 static CFCalendarUnit __CFCalendarGetCalendarUnitFromChar(char ch) {
     switch (ch) {
+    case 'S': return __kCFCalendarUnitNanosecond;
     case 'G': return kCFCalendarUnitEra;
     case 'y': return kCFCalendarUnitYear;
     case 'M': return kCFCalendarUnitMonth;
@@ -458,6 +462,17 @@ static void __CFCalendarSetToFirstInstant(CFCalendarRef calendar, CFCalendarUnit
 	    ucal_setMillis(calendar->_cal, bad_udate, &status);
 	} while (ucal_get(calendar->_cal, UCAL_ERA, &status) < target_era);
     }
+}
+
+// Initial add step (as a power of two) per CFCalendarUnit bit position, through Nanosecond (1 << 15),
+// whose 'S' difference is counted in ICU milliseconds.
+static const int __CFCalendarMultipleTable[] = {0, 0, 16, 19, 24, 26, 24, 28, 14, 14, 14, 14, 14, 14, 16, 30};
+
+static Boolean __CFCalendarGetInitialMultiple(CFCalendarUnit unit, int *multiple) {
+    int idx = flsl(unit) - 1;
+    if (idx < 0 || idx >= (int)(sizeof(__CFCalendarMultipleTable) / sizeof(__CFCalendarMultipleTable[0]))) return false;
+    *multiple = 1 << __CFCalendarMultipleTable[idx];
+    return true;
 }
 
 static Boolean __validUnits(CFCalendarUnit smaller, CFCalendarUnit bigger) {
@@ -702,9 +717,9 @@ CFIndex CFCalendarGetOrdinalityOfUnit(CFCalendarRef calendar, CFCalendarUnit sma
 	__CFCalendarSetToFirstInstant(calendar, biggerUnit, at);
 	UDate curr = ucal_getMillis(calendar->_cal, &status);
         UDate goal = floor((at + kCFAbsoluteTimeIntervalSince1970) * 1000.0);
+	int multiple;
+	if (smallField == (UCalendarDateFields)-1 || !__CFCalendarGetInitialMultiple(smallerUnit, &multiple)) return kCFNotFound;
 	result = 1;
-	const int multiple_table[] = {0, 0, 16, 19, 24, 26, 24, 28, 14, 14, 14};
-	int multiple = (1 << multiple_table[flsl(smallerUnit) - 1]);
 	Boolean divide = false, alwaysDivide = false;
 	while (curr < goal) {
 	    ucal_add(calendar->_cal, smallField, multiple, &status);
@@ -837,8 +852,9 @@ Boolean _CFCalendarGetComponentDifferenceV(CFCalendarRef calendar, CFAbsoluteTim
 	char ch = *componentDesc;
 	while (ch) {
 	    UCalendarDateFields field = __CFCalendarGetICUFieldCodeFromChar(ch);
-	    const int multiple_table[] = {0, 0, 16, 19, 24, 26, 24, 28, 14, 14, 14};
-	    int multiple = direction * (1 << multiple_table[flsl(__CFCalendarGetCalendarUnitFromChar(ch)) - 1]);
+	    int multiple;
+	    if (!__CFCalendarGetInitialMultiple(__CFCalendarGetCalendarUnitFromChar(ch), &multiple)) return false;
+	    multiple *= direction;
 	    Boolean divide = false, alwaysDivide = false;
 	    int result = 0;
 	    while ((direction > 0 && curr < goal) || (direction < 0 && goal < curr)) {

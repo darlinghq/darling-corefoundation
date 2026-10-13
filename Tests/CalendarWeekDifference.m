@@ -49,6 +49,18 @@ int main(void)
                                           fromDate:date];
         check_result("decompose 2021-02-10 week fields",
                      [c yearForWeekOfYear] == 2021 && [c weekOfYear] == 7 && [c weekOfMonth] == 2 && [c day] == 10);
+
+        // Nanosecond ('S') is counted in ICU milliseconds, so use a whole number of them.
+        NSDate *from = [NSDate dateWithTimeIntervalSince1970:kStart];
+        NSDate *to = [NSDate dateWithTimeIntervalSince1970:kStart + 1.5];
+        c = [calendar components:NSCalendarUnitSecond | NSCalendarUnitNanosecond fromDate:from toDate:to options:0];
+        check_result("second+nanosecond over 1.5 s", c != nil && [c second] == 1 && [c nanosecond] == 500 * NSEC_PER_MSEC);
+
+        // 'h' (12-hour hour) maps to no CFCalendarUnit, so it has no step-table entry: the call must fail.
+        CFAbsoluteTime at = kStart - kCFAbsoluteTimeIntervalSince1970;
+        int hours = 0;
+        Boolean ok = CFCalendarGetComponentDifference((CFCalendarRef)calendar, at, at + 3600, 0, "h", &hours);
+        check_result("difference with unmapped unit 'h' fails", !ok);
     }
     return failures != 0;
 }
