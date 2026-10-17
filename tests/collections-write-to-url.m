@@ -5,6 +5,16 @@
 #include <stdio.h>
 #include <unistd.h>
 
+// Not the generic NSFileWriteUnknownError (512), and ENOENT is the error or sits underneath it: this
+// runtime reports NSPOSIXErrorDomain/ENOENT directly, Apple's reports NSCocoaErrorDomain 4 with the
+// POSIX error as NSUnderlyingErrorKey.
+static BOOL isMissingFileError(NSError *error) {
+    if (error == nil || [error code] == 512) return NO;
+    if ([[error domain] isEqual:NSPOSIXErrorDomain] && [error code] == ENOENT) return YES;
+    NSError *underlying = [[error userInfo] objectForKey:NSUnderlyingErrorKey];
+    return [[underlying domain] isEqual:NSPOSIXErrorDomain] && [underlying code] == ENOENT;
+}
+
 int main(void) {
     NSAutoreleasePool *pool = [NSAutoreleasePool new];
     NSString *dir = [NSString stringWithFormat:@"/tmp/collections-write-to-url-%d", (int)getpid()];
@@ -29,11 +39,10 @@ int main(void) {
     error = nil;
     assert(![array writeToURL:missing error:&error]);
     assert(error != nil);
-    assert([[error domain] isEqual:NSPOSIXErrorDomain]);
-    assert([error code] == ENOENT);
+    assert(isMissingFileError(error));
     error = nil;
     assert(![dictionary writeToURL:missing error:&error]);
-    assert([[error domain] isEqual:NSPOSIXErrorDomain] && [error code] == ENOENT);
+    assert(isMissingFileError(error));
 
     // content that is not a property list fails without touching the file system
     NSURL *invalidURL = [NSURL fileURLWithPath:[dir stringByAppendingPathComponent:@"invalid.plist"]];
