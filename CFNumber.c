@@ -860,7 +860,7 @@ CFLog(kCFLogLevelWarning, CFSTR("*** TEST FAIL in __CFNumberCopyDescription: '%@
 
 // This function separated out from __CFNumberCopyFormattingDescription() so the plist creation can use it as well.
 
-static CFStringRef __CFNumberCreateFormattingDescriptionAsFloat64(CFAllocatorRef allocator, CFTypeRef cf) {
+static CFStringRef __CFNumberCreateFormattingDescriptionAsFloat64(CFAllocatorRef allocator, CFTypeRef cf, CFDictionaryRef formatOptions) {
     Float64 d;
     CFNumberGetValue((CFNumberRef)cf, kCFNumberFloat64Type, &d);
     if (isnan(d)) {
@@ -873,11 +873,11 @@ static CFStringRef __CFNumberCreateFormattingDescriptionAsFloat64(CFAllocatorRef
 	return (CFStringRef)CFRetain(CFSTR("0.0"));
     }
     // if %g is used here, need to use DBL_DIG + 2 on Mac OS X, but %f needs +1
-    return CFStringCreateWithFormat(allocator, NULL, CFSTR("%.*g"), DBL_DIG + 2, d);
+    return CFStringCreateWithFormat(allocator, formatOptions, CFSTR("%.*g"), DBL_DIG + 2, d);
 }
 
 CF_PRIVATE CFStringRef __CFNumberCopyFormattingDescriptionAsFloat64(CFTypeRef cf) {
-    CFStringRef result = __CFNumberCreateFormattingDescriptionAsFloat64(kCFAllocatorSystemDefault, cf);
+    CFStringRef result = __CFNumberCreateFormattingDescriptionAsFloat64(kCFAllocatorSystemDefault, cf, NULL);
 #if OLD_CRAP_TOO
 CFNumberRef number = (CFNumberRef)cf;
 if (! number->__old__) {
@@ -896,12 +896,13 @@ CF_PRIVATE CFStringRef __CFNumberCreateFormattingDescription(CFAllocatorRef allo
     CFNumberRef number = (CFNumberRef)cf;
     CFNumberType type = __CFNumberGetType(number);
     if (__CFNumberTypeTable[type].floatBit) {
-        return __CFNumberCreateFormattingDescriptionAsFloat64(allocator, number);
+        return __CFNumberCreateFormattingDescriptionAsFloat64(allocator, number, formatOptions);
     }
     CFSInt128Struct i;
     __CFNumberGetValue(number, kCFNumberSInt128Type, &i);
     char buffer[128];
     emit128(buffer, &i, false);
+    // emit128 outputs invariant decimal characters; %s does not apply numeric locale formatting.
     return CFStringCreateWithFormat(allocator, NULL, CFSTR("%s"), buffer);
 }
 
@@ -915,6 +916,7 @@ static CFStringRef __CFNumberCopyFormattingDescription_new(CFTypeRef cf, CFDicti
     __CFNumberGetValue(number, kCFNumberSInt128Type, &i);
     char buffer[128];
     emit128(buffer, &i, false);
+    // emit128 outputs invariant decimal characters; %s does not apply numeric locale formatting.
     return CFStringCreateWithFormat(kCFAllocatorSystemDefault, NULL, CFSTR("%s"), buffer);
 }
 
