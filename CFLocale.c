@@ -307,9 +307,24 @@ static CFLocaleRef _CFLocaleCopyCurrentGuts(CFStringRef name, Boolean useCache, 
     // things which call this function thousands or millions of times in
     // a short period.
     if (!name) {
-#if 0 // DEPLOYMENT_TARGET_MACOSX || DEPLOYMENT_TARGET_EMBEDDED || DEPLOYMENT_TARGET_WINDOWS || DEPLOYMENT_TARGET_LINUX
         name = (CFStringRef)CFPreferencesCopyAppValue(CFSTR("AppleLocale"), kCFPreferencesCurrentApplication);
-#endif
+        if (!name) {
+            const char *env = getenv("LC_ALL");
+            if (!env || !*env) env = getenv("LC_NUMERIC");
+            if (!env || !*env) env = getenv("LANG");
+            if (env && *env) {
+                char buf[64];
+                strncpy(buf, env, sizeof(buf) - 1);
+                buf[sizeof(buf) - 1] = '\0';
+                char *dot = strchr(buf, '.');
+                if (dot) *dot = '\0';
+                char *at = strchr(buf, '@');
+                if (at) *at = '\0';
+                if (strcmp(buf, "C") != 0 && strcmp(buf, "POSIX") != 0) {
+                    name = CFStringCreateWithCString(kCFAllocatorSystemDefault, buf, kCFStringEncodingUTF8);
+                }
+            }
+        }
     } else {
         CFRetain(name);
     }
