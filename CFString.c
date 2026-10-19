@@ -6575,7 +6575,7 @@ void CFShowStr(CFStringRef str) {
 
 /* Darling has no locale hyphenation dictionaries. Advertise that capability
  * truthfully instead of leaving the macOS APIs absent (which aborts callers
- * at lazy symbol binding). Ordinary line wrapping remains available. */
+ * at lazy symbol binding). */
 Boolean CFStringIsHyphenationAvailableForLocale(CFLocaleRef locale) {
     (void)locale;
     return false;
