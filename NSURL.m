@@ -18,6 +18,7 @@
 #include <sys/statvfs.h>
 #include <sys/stat.h>
 #include <dlfcn.h>
+#include <limits.h>
 
 #define STACK_BUFFER_SIZE 100 // pretty safe bet this will be quite unlikely to use more than this since there are only 94 properties
 
@@ -1041,22 +1042,66 @@ CFDictionaryRef CFURLCreateResourcePropertiesForKeysFromBookmarkData(CFAllocator
     return NULL;
 }
 
+// Bookmark data is the raw UTF-8 POSIX path. It is opaque to callers and is not
+// compatible with macOS bookmark data (it cannot be exchanged with a Mac).
 CFURLRef CFURLCreateByResolvingBookmarkData(CFAllocatorRef allocator, CFDataRef bookmark, CFURLBookmarkResolutionOptions options, CFURLRef relativeToURL, CFArrayRef resourcePropertiesToInclude, Boolean* isStale, CFErrorRef* error)
 {
-#warning TODO: FIXME
-    return NULL;
+    if (bookmark == NULL)
+        return NULL;
+    CFIndex len = CFDataGetLength(bookmark);
+    if (len <= 0)
+        return NULL;
+    const UInt8 *bytes = CFDataGetBytePtr(bookmark);
+    CFStringRef path = CFStringCreateWithBytes(allocator, bytes, len, kCFStringEncodingUTF8, false);
+    if (path == NULL)
+        return NULL;
+    CFURLRef url = CFURLCreateWithFileSystemPath(allocator, path, kCFURLPOSIXPathStyle, true);
+    CFRelease(path);
+    if (isStale != NULL)
+        *isStale = false;
+    return url;
 }
 
+// Bookmark data is the raw UTF-8 POSIX path. It is opaque to callers and is not
+// compatible with macOS bookmark data (it cannot be exchanged with a Mac).
 CFDataRef CFURLCreateBookmarkData(CFAllocatorRef allocator, CFURLRef url, CFURLBookmarkCreationOptions options, CFArrayRef resourcePropertiesToInclude, CFURLRef relativeToURL, CFErrorRef *error)
 {
-#warning TODO: FIXME
-    return NULL;
+    if (url == NULL)
+        return NULL;
+    CFStringRef path = CFURLCopyFileSystemPath(url, kCFURLPOSIXPathStyle);
+    if (path == NULL)
+        return NULL;
+    CFIndex len = CFStringGetLength(path);
+    CFIndex maxLen = CFStringGetMaximumSizeForEncoding(len, kCFStringEncodingUTF8);
+    if (maxLen <= 0) {
+        CFRelease(path);
+        return NULL;
+    }
+    char *buf = malloc(maxLen + 1);
+    if (!buf) {
+        CFRelease(path);
+        return NULL;
+    }
+    CFStringGetCString(path, buf, maxLen + 1, kCFStringEncodingUTF8);
+    CFRelease(path);
+    CFDataRef data = CFDataCreate(allocator, (const UInt8 *)buf, strlen(buf));
+    free(buf);
+    return data;
 }
 
 Boolean CFURLResourceIsReachable(CFURLRef url, CFErrorRef *error)
 {
-#warning TODO: FIXME
-    return false;
+    if (url == NULL)
+        return false;
+    CFStringRef path = CFURLCopyFileSystemPath(url, kCFURLPOSIXPathStyle);
+    if (path == NULL)
+        return false;
+    char cpath[PATH_MAX];
+    Boolean ok = CFStringGetCString(path, cpath, sizeof(cpath), kCFStringEncodingUTF8);
+    CFRelease(path);
+    if (!ok)
+        return false;
+    return access(cpath, F_OK) == 0;
 }
 
 @implementation NSURL
@@ -1144,6 +1189,15 @@ Boolean CFURLResourceIsReachable(CFURLRef url, CFErrorRef *error)
 - (BOOL)isFileReferenceURL
 {
     return _CFURLIsFileReferenceURL([self _cfurl]);
+}
+
+- (BOOL)startAccessingSecurityScopedResource
+{
+    return YES;
+}
+
+- (void)stopAccessingSecurityScopedResource
+{
 }
 
 - (BOOL)checkResourceIsReachableAndReturnError:(NSError **)error
