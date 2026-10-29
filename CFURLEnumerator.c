@@ -267,7 +267,7 @@ CFURLEnumeratorResult CFURLEnumeratorGetNextURL(CFURLEnumeratorRef enumer, CFURL
         CFRelease(fileInfo);
     }
 
-    if (isDir && (enumerator->options & kCFURLEnumeratorDescendRecursively) == 0) {
+    if (isDir && (enumerator->options & kCFURLEnumeratorDescendRecursively) != 0) {
         if (CFURLEnumeratorPushURL(enumerator, item, error) <= 0) {
             return kCFURLEnumeratorError; // error populated by push
         }
