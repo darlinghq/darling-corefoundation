@@ -4,4 +4,4 @@ Build DictionaryKeyCopy.m against Foundation/CoreFoundation (ARC or MRC) and run
 
 Installed baseline: one failure per entry point that stores keys (the stored key follows the mutation) and the non-NSCopying cases do not raise on the immutable path; candidate: zero failures.
 
-Limitations: NSNull's copyWithZone: returns kCFNull without retaining it, so an NSNull key is not covered here; that is a separate, pre-existing issue. The initWithDictionary: and addEntriesFromDictionary: cases build their source with CFDictionaryCreateMutable and kCFTypeDictionaryKeyCallBacks, so the receiver is the only place a key can be copied.
+The initWithDictionary: and addEntriesFromDictionary: cases build their source with CFDictionaryCreateMutable and kCFTypeDictionaryKeyCallBacks, so the receiver is the only place a key can be copied. The test also exercises NSNull keys across dictionaryWithObject:forKey:, setObject:forKey:, subscripting, and literals, and verifies via runtime method swizzling of -[NSNull retain] that -[NSNull copy] explicitly dispatches retain to satisfy the +1 NSCopying ownership contract.
