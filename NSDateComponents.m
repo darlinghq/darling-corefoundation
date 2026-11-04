@@ -284,6 +284,51 @@ typedef struct {
     parts->weekdayOrdinal = weekdayOrdinal;
 }
 
+// The components by unit, as Swift's Calendar and iOS 8's API read them.
+- (NSInteger)valueForComponent:(NSCalendarUnit)unit
+{
+    switch (unit)
+    {
+        case NSCalendarUnitEra: return [self era];
+        case NSCalendarUnitYear: return [self year];
+        case NSCalendarUnitMonth: return [self month];
+        case NSCalendarUnitDay: return [self day];
+        case NSCalendarUnitHour: return [self hour];
+        case NSCalendarUnitMinute: return [self minute];
+        case NSCalendarUnitSecond: return [self second];
+        case NSCalendarUnitWeekday: return [self weekday];
+        case NSCalendarUnitWeekdayOrdinal: return [self weekdayOrdinal];
+        case NSCalendarUnitQuarter: return [self quarter];
+        case NSCalendarUnitWeekOfMonth: return [self weekOfMonth];
+        case NSCalendarUnitWeekOfYear: return [self weekOfYear];
+        case NSCalendarUnitYearForWeekOfYear: return [self yearForWeekOfYear];
+        case NSCalendarUnitNanosecond: return [self nanosecond];
+        default: return NSUndefinedDateComponent;
+    }
+}
+
+- (void)setValue:(NSInteger)value forComponent:(NSCalendarUnit)unit
+{
+    switch (unit)
+    {
+        case NSCalendarUnitEra: [self setEra:value]; break;
+        case NSCalendarUnitYear: [self setYear:value]; break;
+        case NSCalendarUnitMonth: [self setMonth:value]; break;
+        case NSCalendarUnitDay: [self setDay:value]; break;
+        case NSCalendarUnitHour: [self setHour:value]; break;
+        case NSCalendarUnitMinute: [self setMinute:value]; break;
+        case NSCalendarUnitSecond: [self setSecond:value]; break;
+        case NSCalendarUnitWeekday: [self setWeekday:value]; break;
+        case NSCalendarUnitWeekdayOrdinal: [self setWeekdayOrdinal:value]; break;
+        case NSCalendarUnitQuarter: [self setQuarter:value]; break;
+        case NSCalendarUnitWeekOfMonth: [self setWeekOfMonth:value]; break;
+        case NSCalendarUnitWeekOfYear: [self setWeekOfYear:value]; break;
+        case NSCalendarUnitYearForWeekOfYear: [self setYearForWeekOfYear:value]; break;
+        case NSCalendarUnitNanosecond: [self setNanosecond:value]; break;
+        default: break;
+    }
+}
+
 - (NSCalendar *)calendar
 {
     NSDateComponentParts *parts = (NSDateComponentParts *)object_getIndexedIvars(self);
