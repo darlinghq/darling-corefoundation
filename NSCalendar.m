@@ -100,67 +100,67 @@ static int makeCFCalendarComponentVector(NSDateComponents *comps, int *component
     NSInteger weekdayOrdinal = [comps weekdayOrdinal];
 
     int count = 0;
-    if (era != INT_MAX)
+    if (era != NSUndefinedDateComponent)
     {
         componentVector[count] = era;
         format[count++] = 'G';
     }
-    if (year != INT_MAX)
+    if (year != NSUndefinedDateComponent)
     {
         componentVector[count] = year;
         format[count++] = 'y';
     }
-    if (month != INT_MAX)
+    if (month != NSUndefinedDateComponent)
     {
         componentVector[count] = month;
         format[count++] = 'M';
     }
-    if (day != INT_MAX)
+    if (day != NSUndefinedDateComponent)
     {
         componentVector[count] = day;
         format[count++] = 'd';
     }
-    if (hour != INT_MAX)
+    if (hour != NSUndefinedDateComponent)
     {
         componentVector[count] = hour;
         format[count++] = 'H';
     }
-    if (minute != INT_MAX)
+    if (minute != NSUndefinedDateComponent)
     {
         componentVector[count] = minute;
         format[count++] = 'm';
     }
-    if (second != INT_MAX)
+    if (second != NSUndefinedDateComponent)
     {
         componentVector[count] = second;
         format[count++] = 's';
     }
-    if (nanosecond != INT_MAX)
+    if (nanosecond != NSUndefinedDateComponent)
     {
         componentVector[count] = nanosecond / NSEC_PER_MSEC;
         format[count++] = 'S';
     }
-    if (weekOfYear != INT_MAX)
+    if (weekOfYear != NSUndefinedDateComponent)
     {
         componentVector[count] = weekOfYear;
         format[count++] = 'w';
     }
-    if (weekOfMonth != INT_MAX)
+    if (weekOfMonth != NSUndefinedDateComponent)
     {
         componentVector[count] = weekOfMonth;
         format[count++] = 'W';
     }
-    if (yearForWeekOfYear != INT_MAX)
+    if (yearForWeekOfYear != NSUndefinedDateComponent)
     {
         componentVector[count] = yearForWeekOfYear;
         format[count++] = 'Y';
     }
-    if (weekday != INT_MAX)
+    if (weekday != NSUndefinedDateComponent)
     {
         componentVector[count] = weekday;
         format[count++] = 'E';
     }
-    if (weekdayOrdinal != INT_MAX)
+    if (weekdayOrdinal != NSUndefinedDateComponent)
     {
         componentVector[count] = weekdayOrdinal;
         format[count++] = 'F';

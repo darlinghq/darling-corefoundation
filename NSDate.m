@@ -54,9 +54,10 @@ CF_PRIVATE
     return CFDateGetTypeID();
 }
 
+/* Its coding is a single double (NS.time), as Apple's. */
 + (BOOL)supportsSecureCoding
 {
-    return NO;
+    return YES;
 }
 
 - (id)copyWithZone:(NSZone *)zone
