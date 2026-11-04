@@ -51,6 +51,14 @@ int main(void) {
     assert([[error domain] isEqual:NSCocoaErrorDomain] && [error code] == 3852);
     assert(![[NSFileManager defaultManager] fileExistsAtPath:[invalidURL path]]);
 
+    // a nil URL raises NSInvalidArgumentException (from the data writer) and the pool then frees the plist data
+    for (int i = 0; i < 2; i++) {
+        BOOL raised = NO;
+        @try { (void)[(i ? (id)dictionary : (id)array) writeToURL:(NSURL *)nil error:&error]; }
+        @catch (NSException *e) { raised = [[e name] isEqual:NSInvalidArgumentException]; }
+        assert(raised);
+    }
+
     // a NULL error pointer is allowed
     assert(![array writeToURL:missing error:NULL]);
     assert([array writeToURL:arrayURL error:NULL]);

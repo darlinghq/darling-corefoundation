@@ -12,3 +12,7 @@ Success prints:
 ```
 PASS: writeToURL:error: for NSArray and NSDictionary reports the real error
 ```
+
+A nil URL raises `NSInvalidArgumentException`. The plist data is autoreleased so
+the raise no longer leaks it; the test checks the raise, but a leak is not
+observable from the test.

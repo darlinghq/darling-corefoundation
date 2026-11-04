@@ -988,7 +988,8 @@ static NSString *_getDescription(id obj, id locale, int level)
 
 - (BOOL)writeToURL:(NSURL *)url error:(NSError **)error
 {
-    NSData *data = (NSData *)_CFPropertyListCreateXMLData(kCFAllocatorDefault, (CFPropertyListRef)self, true);
+    // autoreleased: writeToURL:options:error: raises for a nil URL, which would skip a manual release
+    NSData *data = [(NSData *)_CFPropertyListCreateXMLData(kCFAllocatorDefault, (CFPropertyListRef)self, true) autorelease];
     if (data == nil) {
         // 3852 is NSPropertyListWriteInvalidError, which FoundationErrors.h does not declare yet
         if (error != NULL) {
@@ -998,7 +999,6 @@ static NSString *_getDescription(id obj, id locale, int level)
     }
     // the data writer reports the real cause (permission, missing directory, ...)
     BOOL success = [data writeToURL:url options:NSDataWritingAtomic error:error];
-    [data release];
     return success;
 }
 
