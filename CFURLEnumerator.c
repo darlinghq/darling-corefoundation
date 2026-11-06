@@ -29,6 +29,8 @@ struct __CFURLEnumerator {
     CFArrayRef propertyKeys;
     CFMutableArrayRef urlStack;
     CFMutableArrayRef dirFileInfos;
+    CFArrayRef mountedVolumeURLs;
+    CFIndex mountedVolumeIndex;
 };
 
 CFComparisonResult _compareFileInfo(const void *fileInfo1, const void *fileInfo2, void *context) {
@@ -39,7 +41,9 @@ CFComparisonResult _compareFileInfo(const void *fileInfo1, const void *fileInfo2
 
 static void __CFURLEnumeratorDeallocate(CFTypeRef cf) {
     struct __CFURLEnumerator *enumerator = (struct __CFURLEnumerator *)cf;
-    CFRelease(enumerator->directoryURL);
+    if (enumerator->directoryURL) {
+        CFRelease(enumerator->directoryURL);
+    }
 
     if (enumerator->propertyKeys != NULL) {
         CFRelease(enumerator->propertyKeys);
@@ -51,6 +55,10 @@ static void __CFURLEnumeratorDeallocate(CFTypeRef cf) {
 
     if (enumerator->dirFileInfos) {
         CFRelease(enumerator->dirFileInfos);
+    }
+
+    if (enumerator->mountedVolumeURLs) {
+        CFRelease(enumerator->mountedVolumeURLs);
     }
 }
 
@@ -213,8 +221,41 @@ CFURLEnumeratorRef CFURLEnumeratorCreateForDirectoryURL(CFAllocatorRef alloc, CF
     }
     enumerator->urlStack = CFArrayCreateMutable(kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks);
     enumerator->dirFileInfos = CFArrayCreateMutable(kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks);
+    enumerator->mountedVolumeURLs = NULL;
     
     if (CFURLEnumeratorPushURL(enumerator, directoryURL, NULL) <= 0) {
+        CFRelease(enumerator);
+        return NULL;
+    }
+
+    return (CFURLEnumeratorRef)enumerator;
+}
+
+CFURLEnumeratorRef CFURLEnumeratorCreateForMountedVolumes(CFAllocatorRef alloc, CFURLEnumeratorOptions option, CFArrayRef propertyKeys) {
+    struct __CFURLEnumerator *enumerator = _CFURLEnumeratorCreate(alloc);
+    if (enumerator == NULL) {
+        return NULL;
+    }
+
+    enumerator->options = option;
+    if (propertyKeys != NULL) {
+        enumerator->propertyKeys = CFArrayCreateCopy(alloc, propertyKeys);
+    }
+    if (propertyKeys != NULL && enumerator->propertyKeys == NULL) {
+        CFRelease(enumerator);
+        return NULL;
+    }
+
+    CFURLRef rootURL = CFURLCreateWithFileSystemPath(alloc, CFSTR("/"), kCFURLPOSIXPathStyle, true);
+    if (rootURL == NULL) {
+        CFRelease(enumerator);
+        return NULL;
+    }
+
+    const void *volumeURLs[] = { rootURL };
+    enumerator->mountedVolumeURLs = CFArrayCreate(alloc, volumeURLs, 1, &kCFTypeArrayCallBacks);
+    CFRelease(rootURL);
+    if (enumerator->mountedVolumeURLs == NULL) {
         CFRelease(enumerator);
         return NULL;
     }
@@ -231,6 +272,28 @@ CFURLEnumeratorResult CFURLEnumeratorGetNextURL(CFURLEnumeratorRef enumer, CFURL
 
     if (error != NULL) {
         *error = NULL;
+    }
+
+    if (enumerator->mountedVolumeURLs != NULL) {
+        CFIndex volumeCount = CFArrayGetCount(enumerator->mountedVolumeURLs);
+        if (enumerator->mountedVolumeIndex >= volumeCount) {
+            return kCFURLEnumeratorEnd;
+        }
+
+        CFURLRef volumeURL = (CFURLRef)CFArrayGetValueAtIndex(enumerator->mountedVolumeURLs, enumerator->mountedVolumeIndex++);
+        if (url != NULL) {
+            *url = (CFURLRef)CFRetain(volumeURL);
+        }
+
+        if (enumerator->propertyKeys != NULL) {
+            CFDictionaryRef properties = CFURLCopyResourcePropertiesForKeys(volumeURL, enumerator->propertyKeys, error);
+            if (properties == NULL) {
+                return kCFURLEnumeratorError;
+            }
+            CFRelease(properties);
+        }
+
+        return kCFURLEnumeratorSuccess;
     }
 
     CFIndex count = 0;
