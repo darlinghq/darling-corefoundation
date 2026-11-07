@@ -51,8 +51,9 @@ CF_PRIVATE
         case kCFCompareGreaterThan:
             return NSOrderedAscending;
         case kCFCompareEqualTo:
-            return NSOrderedDescending;
+            return NSOrderedSame;
     }
+    return NSOrderedSame;
 }
 
 - (Boolean)_getValue:(void *)value forType:(CFNumberType)type
@@ -401,6 +402,7 @@ CF_PRIVATE
                 return NSOrderedSame;
         }
     }
+    return NSOrderedSame;
 }
 
 - (BOOL)_getValue:(void *)val forType:(CFNumberType)type
