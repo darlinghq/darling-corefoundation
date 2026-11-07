@@ -238,7 +238,10 @@ static CFURLRef  _preferencesDirectoryForUserHost(CFStringRef  userName, CFStrin
     return _preferencesDirectoryForUserHostSafetyLevel(userName, hostName, __CFSafeLaunchLevel);
 }
 
-static Boolean __CFPreferencesWritesXML = true;
+// Preference files are binary property lists, as on macOS. XML cannot
+// represent every value a domain can hold: it has no 32-bit reals and no
+// negative zero, so those would change on the next read.
+static Boolean __CFPreferencesWritesXML = false;
 
 Boolean __CFPreferencesShouldWriteXML(void) {
     return __CFPreferencesWritesXML;
