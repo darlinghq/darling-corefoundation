@@ -310,16 +310,17 @@ static Boolean _writeXMLFile(CFURLRef url, CFMutableDictionaryRef dict, Boolean 
     Boolean success = false;
     CFAllocatorRef alloc = __CFPreferencesAllocator();
     *tryAgain = false;
+    Boolean skipWrite = false;
     if (CFDictionaryGetCount(dict) == 0) {
-        // Destroy the file
+        // A domain whose last key was removed keeps its file, holding an
+        // empty dictionary, as on macOS; don't create a file for a domain
+        // that never had one.
         CFBooleanRef val = (CFBooleanRef) CFURLCreatePropertyFromResource(alloc, url, kCFURLFileExists, NULL);
-        if (val && CFBooleanGetValue(val)) {
-            success = CFURLDestroyResource(url, NULL);
-        } else {
-            success = true;
-        }
+        skipWrite = !(val && CFBooleanGetValue(val));
         if (val) CFRelease(val);
-    } else {
+        success = skipWrite;
+    }
+    if (!skipWrite) {
         CFPropertyListFormat desiredFormat = __CFPreferencesShouldWriteXML() ? kCFPropertyListXMLFormat_v1_0 : kCFPropertyListBinaryFormat_v1_0;
         CFDataRef data = CFPropertyListCreateData(alloc, dict, desiredFormat, 0, NULL);
         if (data) {
