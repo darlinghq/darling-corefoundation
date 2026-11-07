@@ -986,6 +986,22 @@ static NSString *_getDescription(id obj, id locale, int level)
     return success;
 }
 
+- (BOOL)writeToURL:(NSURL *)url error:(NSError **)error
+{
+    // autoreleased: writeToURL:options:error: raises for a nil URL, which would skip a manual release
+    NSData *data = [(NSData *)_CFPropertyListCreateXMLData(kCFAllocatorDefault, (CFPropertyListRef)self, true) autorelease];
+    if (data == nil) {
+        // 3852 is NSPropertyListWriteInvalidError, which FoundationErrors.h does not declare yet
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:NSCocoaErrorDomain code:3852 userInfo:nil];
+        }
+        return NO;
+    }
+    // the data writer reports the real cause (permission, missing directory, ...)
+    BOOL success = [data writeToURL:url options:NSDataWritingAtomic error:error];
+    return success;
+}
+
 - (NSArray *)keysSortedByValueUsingSelector:(SEL)comparator
 {
     return [[self allKeys] sortedArrayUsingComparator:^NSComparisonResult(id obj1, id obj2) {

@@ -43,6 +43,7 @@ NSString *const NSURLLinkCountKey = @"NSURLLinkCountKey";
 NSString *const NSURLParentDirectoryURLKey = @"NSURLParentDirectoryURLKey";
 NSString *const NSURLVolumeURLKey = @"NSURLVolumeURLKey";
 NSString *const NSURLTypeIdentifierKey = @"NSURLTypeIdentifierKey";
+NSString *const NSURLContentTypeKey = @"NSURLContentTypeKey";
 NSString *const NSURLLocalizedTypeDescriptionKey = @"NSURLLocalizedTypeDescriptionKey";
 NSString *const NSURLLabelNumberKey = @"NSURLLabelNumberKey";
 NSString *const NSURLLabelColorKey = @"NSURLLabelColorKey";
