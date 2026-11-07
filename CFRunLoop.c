@@ -2728,8 +2728,23 @@ void CFRunLoopWakeUp(CFRunLoopRef rl) {
     /* We unconditionally try to send the message, since we don't want
      * to lose a wakeup, but the send may fail if there is already a
      * wakeup pending, since the queue length is 1. */
+#ifdef DARLING
+    /* The send can block on IPC, and holding the run loop lock across
+     * it stalls every other thread that uses this run loop, including
+     * the run loop's own thread. Only the ignoring-wakeups check above
+     * needs the lock. The wake-up port stays the same for as long as
+     * the caller holds its reference to the run loop, so it is safe to
+     * send after unlocking; the worst case is one spurious wake-up,
+     * which CFRunLoop allows. */
+    __CFPort wakeUpPort = rl->_wakeUpPort;
+    __CFRunLoopUnlock(rl);
+    ret = __CFSendTrivialMachMessage(wakeUpPort, 0, MACH_SEND_TIMEOUT, 0);
+    if (ret != MACH_MSG_SUCCESS && ret != MACH_SEND_TIMED_OUT) CRASH("*** Unable to send message to wake up port. (%d) ***", ret);
+    return;
+#else
     ret = __CFSendTrivialMachMessage(rl->_wakeUpPort, 0, MACH_SEND_TIMEOUT, 0);
     if (ret != MACH_MSG_SUCCESS && ret != MACH_SEND_TIMED_OUT) CRASH("*** Unable to send message to wake up port. (%d) ***", ret);
+#endif
 #elif DEPLOYMENT_TARGET_WINDOWS
     SetEvent(rl->_wakeUpPort);
 #endif
