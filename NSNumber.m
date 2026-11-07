@@ -51,8 +51,9 @@ CF_PRIVATE
         case kCFCompareGreaterThan:
             return NSOrderedAscending;
         case kCFCompareEqualTo:
-            return NSOrderedDescending;
+            return NSOrderedSame;
     }
+    return NSOrderedSame;
 }
 
 - (Boolean)_getValue:(void *)value forType:(CFNumberType)type
@@ -203,7 +204,7 @@ CF_PRIVATE
     return GET_VALUE(unsigned char, kCFNumberCharType);
 }
 
-- (BOOL)charValue
+- (char)charValue
 {
     return GET_VALUE(unsigned char, kCFNumberCharType);
 }
@@ -401,6 +402,7 @@ CF_PRIVATE
                 return NSOrderedSame;
         }
     }
+    return NSOrderedSame;
 }
 
 - (BOOL)_getValue:(void *)val forType:(CFNumberType)type
@@ -570,7 +572,7 @@ SINGLETON_RR()
     return (CFBooleanRef)self == kCFBooleanTrue;
 }
 
-- (BOOL)charValue
+- (char)charValue
 {
     return (CFBooleanRef)self == kCFBooleanTrue;
 }

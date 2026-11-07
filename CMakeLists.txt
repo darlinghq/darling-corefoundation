@@ -123,6 +123,7 @@ set(cf_sources
 	NSCache.m
 	NSCalendar.m
 	NSCFType.m
+	NSConstantCollections.m
 	NSConstantString.m
 	NSData.m
 	NSDateComponents.m
