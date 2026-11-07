@@ -677,14 +677,10 @@ CFArrayRef  _CFPreferencesCreateDomainList(CFStringRef  userName, CFStringRef  h
         }
         CFDictionaryRef d = _CFPreferencesDomainDeepCopyDictionary(domain);
         keyCount = d ? CFDictionaryGetCount(d) : 0;
-        if (keyCount) CFRelease(d);
-        if (keyCount == 0) {
-            // Domain was deleted
-            SInt32 firstIndexOfValue = CFArrayGetFirstIndexOfValue(marray, CFRangeMake(0, CFArrayGetCount(marray)), domainName);
-            if (0 <= firstIndexOfValue) {
-                CFArrayRemoveValueAtIndex(marray, firstIndexOfValue);
-            }
-        } else if (!CFArrayContainsValue(marray, CFRangeMake(0, CFArrayGetCount(marray)), domainName)) {
+        if (d) CFRelease(d);
+        // A domain without keys stays listed while its file exists: emptying
+        // a domain keeps the file. Only add domains not yet written to disk.
+        if (keyCount != 0 && !CFArrayContainsValue(marray, CFRangeMake(0, CFArrayGetCount(marray)), domainName)) {
             CFArrayAppendValue(marray, domainName);
         }
         CFRelease(domainName);
