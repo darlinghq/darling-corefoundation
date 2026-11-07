@@ -134,13 +134,12 @@ SINGLETON_RR()
 @end
 
 // Empty `@[]` and `@{}` literals reference these singletons instead of emitting their own objects.
+// clang emits constant literals only for the non-fragile runtime. Under the fragile (i386) runtime
+// no global symbol names a class structure (.objc_class_name_* is an absolute 0), so the
+// singletons could not get a valid isa there; leave them out.
 #if __OBJC2__
 extern struct { Class isa; } _NSConstantArrayClass __asm("_OBJC_CLASS_$_NSConstantArray");
 extern struct { Class isa; } _NSConstantDictionaryClass __asm("_OBJC_CLASS_$_NSConstantDictionary");
-#else
-extern struct { Class isa; } _NSConstantArrayClass __asm(".objc_class_name_NSConstantArray");
-extern struct { Class isa; } _NSConstantDictionaryClass __asm(".objc_class_name_NSConstantDictionary");
-#endif
 
 __attribute__((visibility("default")))
 struct __NSConstantArrayLayout __NSArray0__struct = {
@@ -151,3 +150,4 @@ __attribute__((visibility("default")))
 struct __NSConstantDictionaryLayout __NSDictionary0__struct = {
     (Class)&_NSConstantDictionaryClass, 0, 0, NULL, NULL
 };
+#endif
