@@ -6160,11 +6160,12 @@ static void __CFStringAppendFormatCore(CFMutableStringRef outputString, CFString
 	Boolean hasWidth = false, hasPrecision = false;
 
 	// widthArgNum and widthArg are never set at the same time; same for precArg*
-	if (-1 != specs[curSpec].widthArgNum) {
+	// An incomplete spec (type 0) keeps the -2 '*' marker, so test for a real index.
+	if (0 <= specs[curSpec].widthArgNum) {
 	    width = (SInt32)values[specs[curSpec].widthArgNum].value.int64Value;
 	    hasWidth = true;
 	}
-	if (-1 != specs[curSpec].precArgNum) {
+	if (0 <= specs[curSpec].precArgNum) {
 	    precision = (SInt32)values[specs[curSpec].precArgNum].value.int64Value;
 	    hasPrecision = true;
 	}

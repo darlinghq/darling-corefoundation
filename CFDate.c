@@ -54,11 +54,13 @@ CF_PRIVATE double __CFTSRRate = 0.0;
 static double __CF1_TSRRate = 0.0;
 
 CF_PRIVATE uint64_t __CFTimeIntervalToTSR(CFTimeInterval ti) {
+    CFDateGetTypeID();
     if ((ti * __CFTSRRate) > INT64_MAX / 2) return (INT64_MAX / 2);
     return (uint64_t)(ti * __CFTSRRate);
 }
 
 CF_PRIVATE CFTimeInterval __CFTSRToTimeInterval(uint64_t tsr) {
+    CFDateGetTypeID();
     return (CFTimeInterval)((double)tsr * __CF1_TSRRate);
 }
 
