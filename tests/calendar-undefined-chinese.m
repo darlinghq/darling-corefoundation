@@ -30,9 +30,7 @@ int main(void)
         NSDate *cny = [NSDate dateWithTimeIntervalSince1970:1707523200];
         NSDateComponents *p = [chinese components:NSCalendarUnitMonth | NSCalendarUnitDay fromDate:cny];
         check("chinese new year is month 1 day 1", [p month] == 1 && [p day] == 1);
-        NSDateComponents *oneMonth = [[NSDateComponents alloc] init];
-        [oneMonth setMonth:1];
-        NSDate *next = [chinese dateByAddingComponents:oneMonth toDate:cny options:0];
+        NSDate *next = [chinese dateByAddingUnit:NSCalendarUnitMonth value:1 toDate:cny options:0];
         NSDateComponents *q = [chinese components:NSCalendarUnitMonth | NSCalendarUnitDay fromDate:next];
         check("one month later is month 2 day 1", [q month] == 2 && [q day] == 1);
         // 2024-03-10 00:00 UTC begins the second month.
