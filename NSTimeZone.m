@@ -70,8 +70,8 @@ NSNotificationName const NSSystemTimeZoneDidChangeNotification = @"kCFTimeZoneSy
 
 - (id)copyWithZone:(NSZone *)zone
 {
-    NSRequestConcreteImplementation();
-    return nil;
+    // Time zones are immutable, so a copy is the same object.
+    return [self retain];
 }
 
 + (BOOL)supportsSecureCoding
