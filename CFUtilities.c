@@ -709,6 +709,9 @@ void CFLog(int32_t lev, CFStringRef format, ...) {
     va_end(args);
 }
 
+// Existence of CFLogTest, _CFWebServicesCopyProviderInfo and the two kCFWebServices* constants in
+// CoreFoundation was confirmed on macOS by symbol listing; the argument types and the string values
+// here are inferred from the callers and have not been checked against macOS.
 // SPI used by Apple apps (e.g. Automator, TextEdit) for test/diagnostic logging. Callers pass
 // 0 and an already formatted message; log it at debug level so it stays out of normal output.
 void CFLogTest(int32_t unused, CFStringRef message) {
