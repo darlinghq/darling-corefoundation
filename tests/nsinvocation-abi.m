@@ -102,11 +102,11 @@ int main(void) {
     }
     {
         SEL s = @selector(sumInts::::); NSInvocation *inv = makeInv(t, s);
-        int a = -1, b = 2; long c = 1L << 40; long long d = 5;
+        int a = -1, b = 2; long c = sizeof(long) == 8 ? 1L << 40 : 1L << 30; long long d = 5;
         [inv setArgument:&a atIndex:2]; [inv setArgument:&b atIndex:3];
         [inv setArgument:&c atIndex:4]; [inv setArgument:&d atIndex:5]; [inv invoke];
         long long r = 0; [inv getReturnValue:&r];
-        check("mixed integer widths", r == (1LL << 40) + 6);
+        check("mixed integer widths", r == (long long)c + 6);
     }
     {
         SEL s = @selector(halfFloat:); NSInvocation *inv = makeInv(t, s);
