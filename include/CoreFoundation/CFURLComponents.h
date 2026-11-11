@@ -1,0 +1,1 @@
+../../submodules/swift-corelibs-foundation/CoreFoundation/URL.subproj/CFURLComponents.h
