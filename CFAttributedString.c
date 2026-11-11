@@ -496,6 +496,15 @@ CFTypeRef CFAttributedStringGetAttribute(CFAttributedStringRef aStr, CFIndex loc
     return CFDictionaryGetValue(dict, attrName);
 }
 
+static inline Boolean _CFAttrValuesEqual(CFTypeRef val1, CFTypeRef val2)
+{
+    if (val1 == val2)
+        return true;
+    if (val1 == NULL || val2 == NULL)
+        return false;
+    return CFEqual(val1, val2);
+}
+
 CFDictionaryRef CFAttributedStringGetAttributesAndLongestEffectiveRange(CFAttributedStringRef aStr, CFIndex loc, CFRange inRange, CFRange *longestEffectiveRange)
 {
     CFDictionaryRef retVal = CFAttributedStringGetAttributes(aStr, loc, longestEffectiveRange);
@@ -508,19 +517,21 @@ CFDictionaryRef CFAttributedStringGetAttributesAndLongestEffectiveRange(CFAttrib
     CFRange tempRange;
     CFTypeRef compareVal;
     CFIndex minLimit = __CFMax(0, inRange.location);
-    while (min > minLimit && 
-        (compareVal = CFAttributedStringGetAttributes(aStr, min - 1, &tempRange)) &&
-        CFEqual(retVal, compareVal))
+    while (min > minLimit)
     {
+        compareVal = (CFTypeRef)CFAttributedStringGetAttributes(aStr, min - 1, &tempRange);
+        if (!_CFAttrValuesEqual((CFTypeRef)retVal, compareVal))
+            break;
         min = tempRange.location;
     }
 
     CFIndex inRangeLimit = inRange.location + inRange.length;
     CFIndex maxLimit = __CFMin(CFAttributedStringGetLength(aStr), inRangeLimit);
-    while (max < maxLimit && 
-        (compareVal = CFAttributedStringGetAttributes(aStr, max, &tempRange)) &&
-        CFEqual(retVal, compareVal))
+    while (max < maxLimit)
     {
+        compareVal = (CFTypeRef)CFAttributedStringGetAttributes(aStr, max, &tempRange);
+        if (!_CFAttrValuesEqual((CFTypeRef)retVal, compareVal))
+            break;
         max = tempRange.location + tempRange.length;
     }
     CFIndex newLocation = __CFMax(min, inRange.location);
@@ -541,19 +552,21 @@ CFTypeRef CFAttributedStringGetAttributeAndLongestEffectiveRange(CFAttributedStr
     CFRange tempRange;
     CFTypeRef compareVal;
     CFIndex minLimit = __CFMax(0, inRange.location);
-    while (min > minLimit && 
-        (compareVal = CFAttributedStringGetAttribute(aStr, min - 1, attrName, &tempRange)) &&
-        CFEqual(retVal, compareVal))
+    while (min > minLimit)
     {
+        compareVal = CFAttributedStringGetAttribute(aStr, min - 1, attrName, &tempRange);
+        if (!_CFAttrValuesEqual(retVal, compareVal))
+            break;
         min = tempRange.location;
     }
 
     CFIndex inRangeLimit = inRange.location + inRange.length;
     CFIndex maxLimit = __CFMin(CFAttributedStringGetLength(aStr), inRangeLimit);
-    while (max < maxLimit && 
-        (compareVal = CFAttributedStringGetAttribute(aStr, max, attrName, &tempRange)) &&
-        CFEqual(retVal, compareVal))
+    while (max < maxLimit)
     {
+        compareVal = CFAttributedStringGetAttribute(aStr, max, attrName, &tempRange);
+        if (!_CFAttrValuesEqual(retVal, compareVal))
+            break;
         max = tempRange.location + tempRange.length;
     }
     CFIndex newLocation = __CFMax(min, inRange.location);
