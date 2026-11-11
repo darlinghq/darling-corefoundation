@@ -28,7 +28,7 @@ int main(void)
         check_result("minimum days in first week", [copy minimumDaysInFirstWeek] == 3);
 
         NSDate *date = [NSDate dateWithTimeIntervalSinceReferenceDate:0];
-        check_result("same hour", [[copy components:NSCalendarUnitHour fromDate:date] hour] == [[calendar components:NSCalendarUnitHour fromDate:date] hour]);
+        check_result("same hour", [copy component:NSCalendarUnitHour fromDate:date] == [calendar component:NSCalendarUnitHour fromDate:date]);
 
         [copy setTimeZone:[NSTimeZone timeZoneForSecondsFromGMT:0]];
         check_result("copy is independent", [[[calendar timeZone] name] isEqualToString:@"America/New_York"]);

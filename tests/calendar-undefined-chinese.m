@@ -1,6 +1,6 @@
 // Copyright (C) 2026 Lubos Dolezel
 //
-// Guest test: unset NSDateComponents fields are NSUndefinedDateComponent,
+// Guest test: unset NSDateComponents fields are NSDateComponentUndefined,
 // NSDate supports secure coding, and calendars created from all sixteen
 // identifiers (including Chinese) do basic arithmetic.
 #import <Foundation/Foundation.h>
@@ -16,11 +16,11 @@ int main(void)
 {
     @autoreleasepool {
         NSDateComponents *c = [[NSDateComponents alloc] init];
-        check("year undefined", [c year] == NSUndefinedDateComponent);
-        check("month undefined", [c month] == NSUndefinedDateComponent);
-        check("day undefined", [c day] == NSUndefinedDateComponent);
-        check("hour undefined", [c hour] == NSUndefinedDateComponent);
-        check("weekday undefined", [c weekday] == NSUndefinedDateComponent);
+        check("year undefined", [c year] == NSDateComponentUndefined);
+        check("month undefined", [c month] == NSDateComponentUndefined);
+        check("day undefined", [c day] == NSDateComponentUndefined);
+        check("hour undefined", [c hour] == NSDateComponentUndefined);
+        check("weekday undefined", [c weekday] == NSDateComponentUndefined);
         check("NSDate supports secure coding", [NSDate supportsSecureCoding]);
 
         NSCalendar *chinese = [[NSCalendar alloc] initWithCalendarIdentifier:NSCalendarIdentifierChinese];
@@ -30,9 +30,7 @@ int main(void)
         NSDate *cny = [NSDate dateWithTimeIntervalSince1970:1707523200];
         NSDateComponents *p = [chinese components:NSCalendarUnitMonth | NSCalendarUnitDay fromDate:cny];
         check("chinese new year is month 1 day 1", [p month] == 1 && [p day] == 1);
-        NSDateComponents *oneMonth = [[NSDateComponents alloc] init];
-        [oneMonth setMonth:1];
-        NSDate *next = [chinese dateByAddingComponents:oneMonth toDate:cny options:0];
+        NSDate *next = [chinese dateByAddingUnit:NSCalendarUnitMonth value:1 toDate:cny options:0];
         NSDateComponents *q = [chinese components:NSCalendarUnitMonth | NSCalendarUnitDay fromDate:next];
         check("one month later is month 2 day 1", [q month] == 2 && [q day] == 1);
         // 2024-03-10 00:00 UTC begins the second month.
