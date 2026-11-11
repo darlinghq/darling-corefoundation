@@ -302,29 +302,11 @@ static CFLocaleRef __CFLocaleCurrent = NULL;
 static CFLocaleRef _CFLocaleCopyCurrentGuts(CFStringRef name, Boolean useCache, CFDictionaryRef overridePrefs) {
     
     CFStringRef ident = NULL;
-    // We cannot be helpful here, because it causes performance problems,
-    // even though the preference lookup is relatively quick, as there are
-    // things which call this function thousands or millions of times in
-    // a short period.
+    // The current locale comes from the AppleLocale preference only, as on
+    // macOS; there is no fallback to the process environment. This runs very
+    // often, but the preference lookup is cheap.
     if (!name) {
         name = (CFStringRef)CFPreferencesCopyAppValue(CFSTR("AppleLocale"), kCFPreferencesCurrentApplication);
-        if (!name) {
-            const char *env = getenv("LC_ALL");
-            if (!env || !*env) env = getenv("LC_NUMERIC");
-            if (!env || !*env) env = getenv("LANG");
-            if (env && *env) {
-                char buf[64];
-                strncpy(buf, env, sizeof(buf) - 1);
-                buf[sizeof(buf) - 1] = '\0';
-                char *dot = strchr(buf, '.');
-                if (dot) *dot = '\0';
-                char *at = strchr(buf, '@');
-                if (at) *at = '\0';
-                if (strcmp(buf, "C") != 0 && strcmp(buf, "POSIX") != 0) {
-                    name = CFStringCreateWithCString(kCFAllocatorSystemDefault, buf, kCFStringEncodingUTF8);
-                }
-            }
-        }
     } else {
         CFRetain(name);
     }
@@ -402,6 +384,13 @@ CFLocaleRef _CFLocaleCopyAsIfCurrentWithOverrides(CFStringRef name, CFDictionary
 
 CFLocaleRef CFLocaleCopyCurrent(void) {
     return _CFLocaleCopyCurrentGuts(NULL, true, NULL);
+}
+
+// Reads the preferences straight from the struct, without dispatching to an
+// Objective-C implementation. __NSCFLocale's -_prefs uses this; going through
+// __CFLocaleGetPrefs would dispatch back into -_prefs.
+CF_PRIVATE CFDictionaryRef __CFLocaleGetPrefsNoDispatch(CFLocaleRef locale) {
+    return locale->_prefs;
 }
 
 CF_PRIVATE CFDictionaryRef __CFLocaleGetPrefs(CFLocaleRef locale) {
