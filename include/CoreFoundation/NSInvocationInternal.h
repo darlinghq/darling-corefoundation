@@ -14,6 +14,25 @@
 // hfaCount (arm64 only): number of double members returned in d0-d3, 0 if the result is not such an aggregate.
 void __invoke__(void *send, void *retdata, marg_list args, size_t len, char rettype, unsigned hfaCount);
 
+#if defined(__x86_64__)
+// x86_64 frame layout shared by __invoke__, the forwarding trampolines and NSMethodSignature:
+// rdi, rsi, rdx, rcx, r8, r9 at 0x00, xmm0-xmm7 at 0x30 (16 bytes each), %al at 0xb0, and the
+// caller's stack arguments from 0xe0.
+#define SYSV_SSE_AREA 0x30
+
+// Registers carrying a result: rax, rdx, low halves of xmm0 and xmm1, then a nonzero word if
+// the result is a long double in st(0), which __invoke__ stores at the start instead.
+#define SYSV_RETURN_REGS_SIZE 64
+
+// A register argument split across two eightbytes in different register files has the frame
+// offset of its second eightbyte in the upper 32 bits of its NSMethodType offset.
+void __NSSysVStoreArgument(void *frame, size_t offset, NSUInteger size, const void *value);
+void __NSSysVLoadArgument(const void *frame, size_t offset, NSUInteger size, void *value);
+BOOL __NSSysVReturnsInX87(const char *type);
+void __NSSysVReturnFromRegisters(const void *regs, const char *type, NSUInteger size, void *value);
+void __NSSysVReturnToRegisters(const void *value, const char *type, NSUInteger size, void *regs);
+#endif
+
 #if defined(__arm64__)
 unsigned __NSARM64DoubleHFACount(const char *type);
 void __NSARM64ExtendToInt(void *value, const char *type);

@@ -40,7 +40,9 @@
     }
 
     NSMethodType *argType = [_signature _argInfo:idx];
-    return _frame + argType->offset;
+    // On x86_64 an argument split across register files is reached through
+    // __NSSysVLoadArgument and __NSSysVStoreArgument; this is where its first part lives.
+    return _frame + (argType->offset & 0xffffffffu);
 }
 
 // NSInvocation can retain its arguments, including copies of C
@@ -234,6 +236,13 @@
     NSMethodType *argInfo = [_signature _argInfo:idx];
     void **arg = [self _idxToArg:idx];
 
+#if defined(__x86_64__)
+    if (idx > 0)
+    {
+        __NSSysVLoadArgument(_frame, argInfo->offset, argInfo->size, argumentLocation);
+        return;
+    }
+#endif
     memcpy(argumentLocation, arg, argInfo->size);
 }
 
@@ -255,6 +264,13 @@
     NSMethodType *argInfo = [_signature _argInfo:idx];
     void **arg = [self _idxToArg:idx];
 
+#if defined(__x86_64__)
+    if (idx > 0)
+    {
+        __NSSysVStoreArgument(_frame, argInfo->offset, argInfo->size, argumentLocation);
+    }
+    else
+#endif
     memcpy(arg, argumentLocation, argInfo->size);
 
 #if defined(__arm64__)
@@ -307,8 +323,21 @@ static BOOL isBlock(id object)
     // An indirect result is written by the callee through x8 (_retdata), so the trampoline stores nothing.
     char rettype = [_signature _stret] ? _C_VOID : returnType[0];
     __invoke__(imp, _retdata, frame, [_signature frameLength], rettype, __NSARM64DoubleHFACount(returnType));
+#elif defined(__x86_64__)
+    const char *returnType = stripQualifiersAndComments([_signature methodReturnType]);
+    uint64_t regs[SYSV_RETURN_REGS_SIZE / sizeof(uint64_t)] = { 0 };
+    // __invoke__ takes the result of a long double, or of a struct holding only one, from st(0).
+    char rettype = __NSSysVReturnsInX87(returnType) ? _C_LNG_DBL : returnType[0];
+    __invoke__(imp, regs, frame, [_signature frameLength], rettype, 0);
+
+    // A MEMORY-class result was written through the hidden pointer in the frame; any other
+    // result is rebuilt from the registers that carried it.
+    if (![_signature _stret] && returnType[0] != _C_VOID)
+    {
+        __NSSysVReturnFromRegisters(regs, returnType, [_signature methodReturnLength], _retdata);
+    }
 #else
-    char rettype = [_signature methodReturnType][0];
+    char rettype = stripQualifiersAndComments([_signature methodReturnType])[0];
 
     if ([_signature _stret])
     {
@@ -342,6 +371,9 @@ static BOOL isBlock(id object)
     }
 
     IMP imp;
+#if defined(__i386__)
+    char returnType;
+#endif
 
     if (isBlock([self target]))
     {
@@ -352,6 +384,19 @@ static BOOL isBlock(id object)
         else if ([_signature _stret])
         {
             imp = (IMP)&objc_msgSend_stret;
+        }
+    #endif
+    #if defined(__x86_64__)
+        else if (__NSSysVReturnsInX87([_signature methodReturnType]))
+        {
+            // A message to nil must leave the x87 stack balanced for a long double result.
+            imp = (IMP)&objc_msgSend_fpret;
+        }
+    #elif defined(__i386__)
+        else if ((returnType = stripQualifiersAndComments([_signature methodReturnType])[0]) == _C_FLT
+                 || returnType == _C_DBL || returnType == _C_LNG_DBL)
+        {
+            imp = (IMP)&objc_msgSend_fpret;
         }
     #endif
     else
@@ -495,10 +540,12 @@ static BOOL isBlock(id object)
 
         default:
             {
-                const void *ptr = [self _idxToArg: index + 1];
-                CFDataRef data = CFDataCreateWithBytesNoCopy(NULL, ptr, argInfo->size, kCFAllocatorNull);
+                void *value = calloc(1, argInfo->size ?: 1);
+                [self getArgument: value atIndex: index];
+                CFDataRef data = CFDataCreateWithBytesNoCopy(NULL, value, argInfo->size, kCFAllocatorNull);
                 CFStringAppend(description, (CFStringRef) [data description]);
                 CFRelease(data);
+                free(value);
                 break;
             }
         }
