@@ -43,7 +43,7 @@
 
 - (id)copyWithZone:(NSZone *)zone
 {
-    return (id)kCFNull;
+    return [self retain];
 }
 
 SINGLETON_RR()

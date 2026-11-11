@@ -523,11 +523,18 @@ SINGLETON_RR()
 
 - (NSSet *)objectsWithOptions:(NSEnumerationOptions)opts passingTest:(BOOL (^)(id obj, BOOL *stop))predicate
 {
-    NSArray *objects = [self allObjects];
-    NSIndexSet *indicies = [objects indexesOfObjectsPassingTest:^(id obj, NSUInteger idx, BOOL *stop){
-        return predicate(obj, stop);
-    }];
-    return [[[NSSet alloc] initWithArray:[objects objectsAtIndexes:indicies]] autorelease];
+    NSMutableSet *result = [NSMutableSet set];
+    BOOL stop = NO;
+    for (id obj in self)
+    {
+        if (predicate(obj, &stop))
+        {
+            [result addObject:obj];
+        }
+        if (stop)
+            break;
+    }
+    return result;
 }
 
 @end

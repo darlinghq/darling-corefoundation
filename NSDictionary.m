@@ -203,6 +203,15 @@ static CFDictionaryValueCallBacks sNSCFDictionaryValueCallBacks = {
     &_NSCFEqual
 };
 
+static id sNSDictionaryCopyKey(id key, SEL entryPoint)
+{
+    if (![key respondsToSelector:@selector(copyWithZone:)])
+    {
+        [NSException raise:NSInvalidArgumentException format:@"-[NSDictionary %s]: key of class %s does not conform to NSCopying", sel_getName(entryPoint), class_getName([key class])];
+    }
+    return [key copy];
+}
+
 static __NSPlaceholderDictionary *mutablePlaceholder = nil;
 static __NSPlaceholderDictionary *immutablePlaceholder = nil;
 
@@ -337,29 +346,53 @@ SINGLETON_RR()
         }
     }
 
+    id *copies = cnt ? malloc(sizeof(id) * cnt) : NULL;
+    if (cnt != 0 && copies == NULL)
+    {
+        [self release];
+        [NSException raise:NSMallocException format:@"Unable to allocate %lu keys for dictionary", (unsigned long)cnt];
+        return nil;
+    }
+    NSUInteger copied = 0;
+    @try
+    {
+        for (; copied < cnt; copied++)
+        {
+            copies[copied] = sNSDictionaryCopyKey(keys[copied], _cmd);
+        }
+    }
+    @catch (id e)
+    {
+        while (copied > 0)
+        {
+            [copies[--copied] release];
+        }
+        free(copies);
+        [self release];
+        @throw;
+    }
+
+    CFDictionaryRef dict;
     if (self == mutablePlaceholder)
     {
-        CFMutableDictionaryRef dict = CFDictionaryCreateMutable(kCFAllocatorDefault, cnt, &sNSCFDictionaryKeyCallBacks, &sNSCFDictionaryValueCallBacks);
+        CFMutableDictionaryRef mdict = CFDictionaryCreateMutable(kCFAllocatorDefault, cnt, &sNSCFDictionaryKeyCallBacks, &sNSCFDictionaryValueCallBacks);
         for (NSUInteger idx = 0; idx < cnt; idx++)
         {
-            if ([(NSObject *)keys[idx] respondsToSelector:@selector(copyWithZone:)])
-            {
-                CFDictionarySetValue(dict, keys[idx], objects[idx]);
-            }
-            else
-            {
-                CFRelease(dict);
-                dict = NULL;
-                @throw [NSException exceptionWithName:NSInvalidArgumentException reason:@"" userInfo:@{}];
-            }
+            CFDictionarySetValue(mdict, copies[idx], objects[idx]);
         }
-
-        return (id)dict;
+        dict = mdict;
     }
     else
     {
-        return (id)CFDictionaryCreate(kCFAllocatorDefault, (const void **)keys, (const void **)objects, cnt, &sNSCFDictionaryKeyCallBacks, &sNSCFDictionaryValueCallBacks);
+        dict = CFDictionaryCreate(kCFAllocatorDefault, (const void **)copies, (const void **)objects, cnt, &sNSCFDictionaryKeyCallBacks, &sNSCFDictionaryValueCallBacks);
     }
+
+    while (copied > 0)
+    {
+        [copies[--copied] release];
+    }
+    free(copies);
+    return (id)dict;
 }
 
 @end
@@ -1215,7 +1248,10 @@ static NSString *_getDescription(id obj, id locale, int level)
 
 - (void)setObject:(id)obj forKeyedSubscript:(id <NSCopying>)key
 {
-    [self setObject:obj forKey:key];
+    if (obj == nil)
+        [self removeObjectForKey:key];
+    else
+        [self setObject:obj forKey:key];
 }
 
 @end
@@ -1273,9 +1309,17 @@ static NSString *_getDescription(id obj, id locale, int level)
             return;
         }
 
-        [self willChangeValueForKey:key];
-        CFDictionarySetValue((CFMutableDictionaryRef)self, (const void *)key, (const void *)obj);
-        [self didChangeValueForKey:key];
+        id keyCopy = sNSDictionaryCopyKey(key, _cmd);
+        @try
+        {
+            [self willChangeValueForKey:key];
+            CFDictionarySetValue((CFMutableDictionaryRef)self, (const void *)keyCopy, (const void *)obj);
+            [self didChangeValueForKey:key];
+        }
+        @finally
+        {
+            [keyCopy release];
+        }
     }
     else
     {
