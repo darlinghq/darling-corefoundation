@@ -43,12 +43,6 @@ int main(void)
         [@"x" writeToFile:bare atomically:NO encoding:NSUTF8StringEncoding error:nil];
         check_identifier([NSURL fileURLWithPath:bare], "extensionless regular file", @"public.data");
 
-        id contentType = nil;
-        [[NSURL fileURLWithPath:file] getResourceValue:&contentType forKey:NSURLContentTypeKey error:nil];
-        id identifier = nil;
-        [[NSURL fileURLWithPath:file] getResourceValue:&identifier forKey:NSURLTypeIdentifierKey error:nil];
-        check_result("matches content type identifier", contentType != nil && [identifier isEqual:[contentType identifier]]);
-
         NSError *error = nil;
         id missing = nil;
         BOOL ok = [[NSURL fileURLWithPath:[root stringByAppendingPathComponent:@"absent"]] getResourceValue:&missing forKey:NSURLTypeIdentifierKey error:&error];

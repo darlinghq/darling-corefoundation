@@ -193,57 +193,39 @@ static Boolean CFURLStat(CFURLRef url, struct stat *info) {
     return false;
 }
 
-// UniformTypeIdentifiers links Foundation, so CoreFoundation loads it at runtime to reach its UTType class.
-@protocol CFURLUTType <NSObject>
-+ (id)typeWithFilenameExtension:(NSString *)filenameExtension conformingToType:(id)supertype;
-- (BOOL)isDeclared;
-- (NSString *)identifier;
-@end
-
-static Class<CFURLUTType> UTTypeClass;
-static id UTTypeItemObject, UTTypeDataObject, UTTypeDirectoryObject, UTTypeFolderObject, UTTypeSymbolicLinkObject, UTTypeUnixExecutableObject;
+// The uniform type identifier comes from LaunchServices (as on macOS), which CoreFoundation loads at
+// run time. NSURLContentTypeKey needs a UTType object, which belongs to UniformTypeIdentifiers, a
+// framework above Foundation; CoreFoundation does not reach up to it and leaves that key unhandled.
+static void *UTLaunchServicesHandle;
 static CFErrorRef UTLoadError;
+static CFStringRef (*UTCreatePreferredIdentifierForTag)(CFStringRef, CFStringRef, CFStringRef);
+static Boolean (*UTConformsTo)(CFStringRef, CFStringRef);
+static CFStringRef *UTTagClassFilenameExtension;
 
-static void CFURLLoadUniformTypeIdentifiers(void *context)
+static void CFURLLoadLaunchServices(void *context)
 {
-    void *handle = dlopen("/System/Library/Frameworks/UniformTypeIdentifiers.framework/UniformTypeIdentifiers", RTLD_LAZY | RTLD_LOCAL);
-    if (handle == NULL)
+    UTLaunchServicesHandle = dlopen("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/LaunchServices", RTLD_LAZY | RTLD_LOCAL);
+    if (UTLaunchServicesHandle == NULL)
     {
         dlError(&UTLoadError);
         return;
     }
-
-    const struct { const char *symbol; id *object; } constants[] = {
-        { "UTTypeItem", &UTTypeItemObject },
-        { "UTTypeData", &UTTypeDataObject },
-        { "UTTypeDirectory", &UTTypeDirectoryObject },
-        { "UTTypeFolder", &UTTypeFolderObject },
-        { "UTTypeSymbolicLink", &UTTypeSymbolicLinkObject },
-        { "UTTypeUnixExecutable", &UTTypeUnixExecutableObject },
-    };
-    for (size_t i = 0; i < sizeof(constants) / sizeof(constants[0]); i++)
-    {
-        id *constant = dlsym(handle, constants[i].symbol);
-        if (constant == NULL)
-        {
-            dlError(&UTLoadError);
-            return;
-        }
-        *constants[i].object = *constant;
-    }
-    UTTypeClass = dlsym(handle, "OBJC_CLASS_$_UTType");
-    if (UTTypeClass == nil)
+    UTCreatePreferredIdentifierForTag = dlsym(UTLaunchServicesHandle, "UTTypeCreatePreferredIdentifierForTag");
+    UTConformsTo = dlsym(UTLaunchServicesHandle, "UTTypeConformsTo");
+    UTTagClassFilenameExtension = dlsym(UTLaunchServicesHandle, "kUTTagClassFilenameExtension");
+    if (UTCreatePreferredIdentifierForTag == NULL || UTConformsTo == NULL || UTTagClassFilenameExtension == NULL)
         dlError(&UTLoadError);
 }
 
-// A directory keeps its extension's type only when that type is declared (an .app bundle); otherwise it is a folder.
-static CFTypeRef CFURLCreateContentType(CFURLRef url, CFErrorRef *error)
+// Links, folders, directory types that are declared (.app) and files; a path with no extension
+// is public.data (public.unix-executable when executable).
+static CFStringRef CFURLCreateTypeIdentifier(CFURLRef url, CFErrorRef *error)
 {
     static dispatch_once_t once;
-    dispatch_once_f(&once, NULL, CFURLLoadUniformTypeIdentifiers);
-    if (UTTypeClass == nil)
+    dispatch_once_f(&once, NULL, CFURLLoadLaunchServices);
+    if (UTCreatePreferredIdentifierForTag == NULL || UTConformsTo == NULL || UTTagClassFilenameExtension == NULL)
     {
-        if (error != NULL)
+        if (error != NULL && UTLoadError != NULL)
             *error = (CFErrorRef)CFRetain(UTLoadError);
         return NULL;
     }
@@ -255,34 +237,39 @@ static CFTypeRef CFURLCreateContentType(CFURLRef url, CFErrorRef *error)
         return NULL;
     }
 
-    CFTypeRef value = NULL;
-    @autoreleasepool {
-        NSString *extension = [(NSString *)CFURLCopyPathExtension(url) autorelease];
-        BOOL hasExtension = [extension length] > 0;
-        id type = UTTypeItemObject;
+    if (S_ISLNK(info.st_mode))
+        return CFRetain(CFSTR("public.symlink"));
 
-        if (S_ISLNK(info.st_mode))
+    CFStringRef extension = CFURLCopyPathExtension(url);
+    Boolean hasExtension = extension != NULL && CFStringGetLength(extension) > 0;
+    CFStringRef result = NULL;
+
+    if (S_ISDIR(info.st_mode))
+    {
+        if (hasExtension)
         {
-            type = UTTypeSymbolicLinkObject;
+            CFStringRef candidate = UTCreatePreferredIdentifierForTag(*UTTagClassFilenameExtension, extension, CFSTR("public.directory"));
+            // An extension that no type declares comes back as a dynamic identifier: a plain folder.
+            if (candidate != NULL && !CFStringHasPrefix(candidate, CFSTR("dyn.")) && UTConformsTo(candidate, CFSTR("public.directory")))
+                result = candidate;
+            else if (candidate != NULL)
+                CFRelease(candidate);
         }
-        else if (S_ISDIR(info.st_mode))
-        {
-            id bundleType = hasExtension ? [UTTypeClass typeWithFilenameExtension: extension conformingToType: UTTypeDirectoryObject] : nil;
-            type = [bundleType isDeclared] ? bundleType : UTTypeFolderObject;
-        }
-        else if (S_ISREG(info.st_mode))
-        {
-            if (hasExtension)
-                type = [UTTypeClass typeWithFilenameExtension: extension conformingToType: UTTypeDataObject];
-            else
-                type = (info.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) ? UTTypeUnixExecutableObject : UTTypeDataObject;
-        }
-        if (type != nil)
-            value = CFRetain(type);
-        else if (error != NULL)
-            *error = CFErrorCreate(kCFAllocatorDefault, kCFErrorDomainPOSIX, EINVAL, NULL);
+        if (result == NULL)
+            result = CFRetain(CFSTR("public.folder"));
     }
-    return value;
+    else if (hasExtension)
+    {
+        result = UTCreatePreferredIdentifierForTag(*UTTagClassFilenameExtension, extension, CFSTR("public.data"));
+    }
+    else
+    {
+        result = CFRetain((info.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) ? CFSTR("public.unix-executable") : CFSTR("public.data"));
+    }
+
+    if (extension != NULL)
+        CFRelease(extension); // CFURLCopyPathExtension returns NULL for paths without an extension
+    return result;
 }
 
 static pthread_mutex_t resInfoLock = PTHREAD_MUTEX_INITIALIZER;
@@ -465,16 +452,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
     else if (CFEqual(key, kCFURLTypeIdentifierKey))
     {
         // Key for the resource’s uniform type identifier (UTI), returned as a CFString object.
-        CFTypeRef type = CFURLCreateContentType(url, error);
-        if (type != NULL)
-        {
-            value = CFRetain([(id<CFURLUTType>)type identifier]);
-            CFRelease(type);
-        }
-    }
-    else if (CFEqual(key, (CFStringRef)NSURLContentTypeKey))
-    {
-        value = CFURLCreateContentType(url, error);
+        value = CFURLCreateTypeIdentifier(url, error);
     }
     else if (CFEqual(key, kCFURLLocalizedTypeDescriptionKey))
     {
