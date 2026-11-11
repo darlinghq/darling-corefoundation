@@ -24,8 +24,17 @@ CF_PRIVATE
 @interface __NSCFBoolean : __NSCFType
 @end
 
-// CFNumber.c private type; Foundation stores unsigned values above INT64_MAX with it.
-enum { kCFNumberSInt128Type = 17 };
+// Low 64 bits of a number stored with the 128-bit type (unsigned values above INT64_MAX are kept
+// that way). CFNumberGetValue() with a 64-bit type clamps such values to INT64_MAX instead.
+static BOOL getSInt128Low64(CFNumberRef number, uint64_t *out)
+{
+    if (_CFNumberGetType2(number) != _kCFNumberSInt128Type)
+        return NO;
+    _CFSInt128Struct v;
+    CFNumberGetValue(number, (CFNumberType)_kCFNumberSInt128Type, &v);
+    *out = v.low;
+    return YES;
+}
 
 @implementation __NSCFNumber
 
@@ -164,6 +173,9 @@ enum { kCFNumberSInt128Type = 17 };
 
 - (unsigned long long)unsignedLongLongValue
 {
+    uint64_t low;
+    if (getSInt128Low64((CFNumberRef)self, &low))
+        return low;
     return GET_VALUE(unsigned long long, kCFNumberLongLongType);
 }
 
@@ -174,6 +186,9 @@ enum { kCFNumberSInt128Type = 17 };
 
 - (unsigned long)unsignedLongValue
 {
+    uint64_t low;
+    if (getSInt128Low64((CFNumberRef)self, &low))
+        return (unsigned long)low;
     return GET_VALUE(unsigned long, kCFNumberLongType);
 }
 
@@ -249,7 +264,7 @@ enum { kCFNumberSInt128Type = 17 };
             return @encode(NSInteger);
         case kCFNumberCGFloatType:
             return @encode(float); // really is @encode(CGFloat)
-        case kCFNumberSInt128Type:
+        case _kCFNumberSInt128Type:
             return @encode(unsigned long long);
         default:
             return "";
@@ -260,8 +275,12 @@ enum { kCFNumberSInt128Type = 17 };
 {
     CFNumberType t = _CFNumberGetType2((CFNumberRef)self);
     // objCType reports the 128-bit type as "Q", so callers pass an 8-byte buffer.
-    if (t == kCFNumberSInt128Type)
-        t = kCFNumberSInt64Type;
+    uint64_t low;
+    if (getSInt128Low64((CFNumberRef)self, &low))
+    {
+        memcpy(buffer, &low, sizeof(low));
+        return;
+    }
     CFNumberGetValue((CFNumberRef)self, t, buffer);
 }
 
@@ -537,6 +556,9 @@ SINGLETON_RR()
 
 - (unsigned long long)unsignedLongLongValue
 {
+    uint64_t low;
+    if (getSInt128Low64((CFNumberRef)self, &low))
+        return low;
     return (CFBooleanRef)self == kCFBooleanTrue;
 }
 

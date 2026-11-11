@@ -497,6 +497,15 @@ typedef CFIndex CFSearchPathEnumerationState;
 CF_EXPORT CFSearchPathEnumerationState __CFStartSearchPathEnumeration(CFSearchPathDirectory dir, CFSearchPathDomainMask domainMask);
 CF_EXPORT CFSearchPathEnumerationState __CFGetNextSearchPathEnumeration(CFSearchPathEnumerationState state, UInt8 *path, CFIndex pathSize);
 
+/* 128-bit CFNumber storage, shared by CFNumber and NSNumber so the two layers
+   agree on it. The type is not part of the public CFNumberType enumeration and
+   the field order below is the in-memory layout. */
+enum { _kCFNumberSInt128Type = 17 };
+typedef struct {
+    int64_t high;
+    uint64_t low;
+} _CFSInt128Struct;
+
 /* For use by NSNumber and CFNumber.
   Hashing algorithm for CFNumber:
   M = Max CFHashCode (assumed to be unsigned)
