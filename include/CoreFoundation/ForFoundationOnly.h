@@ -347,6 +347,16 @@ CF_EXPORT CFStringRef  _CFStringCreateWithFormatAndArgumentsAux(CFAllocatorRef a
 CF_EXPORT void _CFStringAppendFormatAndArgumentsAux2(CFMutableStringRef outputString, CFStringRef (*copyDescFunc)(void *, const void *loc), CFStringRef (*contextDescFunc)(void *, const void *, const void *, bool, bool *), CFDictionaryRef formatOptions, CFStringRef formatString, va_list args);
 CF_EXPORT CFStringRef  _CFStringCreateWithFormatAndArgumentsAux2(CFAllocatorRef alloc, CFStringRef (*copyDescFunc)(void *, const void *loc), CFStringRef (*contextDescFunc)(void *, const void *, const void *, bool, bool *), CFDictionaryRef formatOptions, CFStringRef format, va_list arguments);
 
+/* outMetadata receives one dictionary per specifier (including "%%"), in format order, holding the keys below.
+   The replacement ranges describe the output before any contextDescFunc substitution. */
+CF_EXPORT const CFStringRef _kCFStringFormatMetadataReplacementIndexKey;
+CF_EXPORT const CFStringRef _kCFStringFormatMetadataSpecifierRangeLocationInFormatStringKey;
+CF_EXPORT const CFStringRef _kCFStringFormatMetadataSpecifierRangeLengthInFormatStringKey;
+CF_EXPORT const CFStringRef _kCFStringFormatMetadataReplacementRangeLocationKey;
+CF_EXPORT const CFStringRef _kCFStringFormatMetadataReplacementRangeLengthKey;
+CF_EXPORT const CFStringRef _kCFStringFormatMetadataArgumentObjectKey;
+CF_EXPORT CFStringRef _CFStringCreateWithFormatAndArgumentsReturningMetadata(CFAllocatorRef alloc, CFStringRef (*copyDescFunc)(void *, const void *loc), CFStringRef (*contextDescFunc)(void *, const void *, const void *, bool, bool *), CFDictionaryRef formatOptions, CFDictionaryRef formatConfiguration, CFStringRef format, CFArrayRef *outMetadata, va_list arguments);
+
 /* For NSString (and NSAttributedString) usage, mutate with isMutable check
 */
 enum {_CFStringErrNone = 0, _CFStringErrNotMutable = 1, _CFStringErrNilArg = 2, _CFStringErrBounds = 3};
