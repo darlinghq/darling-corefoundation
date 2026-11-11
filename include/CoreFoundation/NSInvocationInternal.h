@@ -16,6 +16,7 @@ void __invoke__(void *send, void *retdata, marg_list args, size_t len, char rett
 
 #if defined(__arm64__)
 unsigned __NSARM64DoubleHFACount(const char *type);
+BOOL __NSARM64PassedByReference(const char *type, NSUInteger size);
 void __NSARM64ExtendToInt(void *value, const char *type);
 #endif
 

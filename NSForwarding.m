@@ -130,6 +130,13 @@ id ___forwarding___(struct objc_sendv_margs *args, void *returnStorage, void *in
     for (NSUInteger i = 0; i < MIN(signatureVerification, signatureArgumentCount); i++)
     {
         void *arg = ((const unsigned char *) args->a) + [signature _argInfo: i + 1]->offset;
+#if defined(__arm64__)
+        // A struct passed by reference: the frame slot holds the address of the caller's copy.
+        if (__NSARM64PassedByReference([signature _argInfo: i + 1]->type, [signature _argInfo: i + 1]->size))
+        {
+            arg = *(void **) arg;
+        }
+#endif
         [inv setArgument: arg atIndex: i];
     }
 
