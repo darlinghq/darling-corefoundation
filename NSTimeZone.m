@@ -76,7 +76,7 @@ NSNotificationName const NSSystemTimeZoneDidChangeNotification = @"kCFTimeZoneSy
 
 + (BOOL)supportsSecureCoding
 {
-    return NO;
+    return YES;
 }
 
 - (CFTypeID)_cfTypeID

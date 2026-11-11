@@ -1199,7 +1199,7 @@ Boolean CFURLResourceIsReachable(CFURLRef url, CFErrorRef *error)
 
 + (BOOL)supportsSecureCoding
 {
-    return NO;
+    return YES;
 }
 
 - (id)bookmarkDataWithAliasRecord:(id)aliasRecord
