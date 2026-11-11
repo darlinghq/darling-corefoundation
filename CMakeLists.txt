@@ -114,8 +114,18 @@ set(cf_c_sources
 	CFXPCBridge.c
 )
 
+# CFURLComponents comes unmodified from the swift-corelibs-foundation
+# submodule; the shim directory supplies the runtime header it expects.
+set(scf_cf_dir ${CMAKE_CURRENT_SOURCE_DIR}/submodules/swift-corelibs-foundation/CoreFoundation)
+set(cf_urlcomponents_sources
+	${scf_cf_dir}/URL.subproj/CFURLComponents.c
+	${scf_cf_dir}/URL.subproj/CFURLComponents_URIParser.c
+	${CMAKE_CURRENT_SOURCE_DIR}/cfurlcomponents-shim/CFURLComponentsRegistration.c
+)
+
 set(cf_sources
 	${cf_c_sources}
+	${cf_urlcomponents_sources}
 	# CFStubs.m
 	NSArray.m
 	NSAttributedString.m
@@ -213,6 +223,10 @@ set_property(TARGET CoreFoundation_arm64 APPEND_STRING PROPERTY
 endif (TARGET_ARM64)
 
 set_source_files_properties(${cf_c_sources} PROPERTIES COMPILE_FLAGS "-x objective-c")
+# Plain C, with the shim header found before and the submodule's Base.subproj
+# (for CFOverflow.h) only after this tree's own headers.
+set_source_files_properties(${cf_urlcomponents_sources} PROPERTIES
+	COMPILE_FLAGS "-x c -I${CMAKE_CURRENT_SOURCE_DIR}/cfurlcomponents-shim -idirafter ${scf_cf_dir}/Base.subproj")
 
 add_darling_executable(plconvert plconvert.c)
 target_link_libraries(plconvert CoreFoundation)
