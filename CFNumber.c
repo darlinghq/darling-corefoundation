@@ -163,13 +163,11 @@ static CFComparisonResult CFNumberCompare_old(struct __CFNumber_old * number1, s
 #error Unknown or unspecified DEPLOYMENT_TARGET
 #endif
 
-typedef struct {	// NOTE WELL: these two fields may switch position someday, do not use '= {high, low}' -style initialization
-    int64_t high;
-    uint64_t low;
-} CFSInt128Struct;
+// NOTE WELL: the two fields of the struct may switch position someday, do not use '= {high, low}' -style initialization
+typedef _CFSInt128Struct CFSInt128Struct;
 
 enum {
-    kCFNumberSInt128Type = 17
+    kCFNumberSInt128Type = _kCFNumberSInt128Type
 };
 
 static uint8_t isNeg128(const CFSInt128Struct *in) {
