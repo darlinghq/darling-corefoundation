@@ -152,20 +152,17 @@ CFNumberFormatterRef CFNumberFormatterCreate(CFAllocatorRef allocator, CFLocaleR
     UChar ubuff[16];
     if (kCFNumberFormatterNoStyle == style) {
         status = U_ZERO_ERROR;
-        // "No style" still has to represent the number honestly: the sign and the fractional part are
-        // part of the value, not decoration. The pattern here used to be just "#;#", which contains
-        // neither '.' nor '-', so no fraction could ever be emitted and a negative number was printed
-        // as its bare digits (-2.25 came out as "2"). UNUM_MAX_FRACTION_DIGITS was then pinned to 0,
-        // which removed any precision the pattern did allow. Ungrouped, because no style means no
-        // separators, and capped at three fraction digits to match Foundation's default formatter.
-        ubuff[0] = '#'; ubuff[1] = '0'; ubuff[2] = '.';
-        ubuff[3] = '#'; ubuff[4] = '#'; ubuff[5] = '#';
-        ubuff[6] = ';';
-        ubuff[7] = '-'; ubuff[8] = '#'; ubuff[9] = '0'; ubuff[10] = '.';
-        ubuff[11] = '#'; ubuff[12] = '#'; ubuff[13] = '#';
-        __cficu_unum_applyPattern(memory->_nf, false, ubuff, 14, NULL, &status);
+        // "No style" keeps the sign but shows no fraction digits (the value is rounded to an integer,
+        // half to even) and uses no grouping. The pattern used to be "#;#", whose negative subpattern
+        // has no minus sign, so negative numbers lost their sign.
+        // Observed on macOS 27 with NSNumberFormatterNoStyle (tier 2, black-box probe
+        // vd-upstream/mac-probes/v183-nostyle.m): -2.25 -> "-2", 0.5 -> "0", 2.5 -> "2", 3.5 -> "4",
+        // 1234567.8912 -> "1234568", -0.4 -> "-0".
+        // Test: tests/number-formatter-nostyle.m
+        ubuff[0] = '#'; ubuff[1] = ';'; ubuff[2] = '-'; ubuff[3] = '#';
+        __cficu_unum_applyPattern(memory->_nf, false, ubuff, 4, NULL, &status);
 	__cficu_unum_setAttribute(memory->_nf, UNUM_MAX_INTEGER_DIGITS, 42);
-	__cficu_unum_setAttribute(memory->_nf, UNUM_MAX_FRACTION_DIGITS, 3);
+	__cficu_unum_setAttribute(memory->_nf, UNUM_MAX_FRACTION_DIGITS, 0);
     }
     memory->_locale = locale ? CFLocaleCreateCopy(allocator, locale) : CFLocaleGetSystem();
     __CFNumberFormatterCustomize(memory);
