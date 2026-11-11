@@ -683,6 +683,10 @@ char __NSI386X87ResultType(const char *type)
                                                           &usedGPRegisters, &usedSSERegisters, &_frameLength);
             }
 #else
+            // The compiler places a long double argument on a 16-byte boundary of the argument
+            // area, although the type encoding it emits says otherwise.
+            if (*stripQualifiersAndComments(currentType) == _C_LNG_DBL)
+                _frameLength = ALIGN_TO(_frameLength, 16);
             _types[_count].offset = _frameLength;
             _frameLength += frameSize;
 #endif
