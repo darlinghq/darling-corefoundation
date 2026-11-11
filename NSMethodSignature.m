@@ -64,11 +64,13 @@ unsigned __NSARM64DoubleHFACount(const char *type)
     }
     return 0;
 }
+#endif
 
-// Apple's arm64 ABI extends integer arguments and results narrower than int to 32 bits
-// (callers extend register arguments, callees extend results), and code compiled for it
-// relies on that. value holds a value of the given type in the low bytes of a 4+ byte slot.
-void __NSARM64ExtendToInt(void *value, const char *type)
+// The arm64, x86_64 and i386 ABIs as implemented by the compiler used for Apple platforms extend
+// integer arguments and results narrower than int to 32 bits (callers extend arguments, callees
+// extend results), and compiled code relies on that. value holds a value of the given type in the
+// low bytes of a 4+ byte slot.
+void __NSExtendNarrowInteger(void *value, const char *type)
 {
     switch (*stripQualifiersAndComments(type))
     {
@@ -99,7 +101,6 @@ void __NSARM64ExtendToInt(void *value, const char *type)
         }
     }
 }
-#endif
 
 #if defined(__x86_64__)
 // System V AMD64 classification. Each eightbyte of an argument or result is INTEGER or SSE;
@@ -370,6 +371,112 @@ void __NSSysVReturnToRegisters(const void *value, const char *type, NSUInteger s
 }
 #endif
 
+#if defined(__i386__)
+// i386 (Darwin) results: a struct or union of 1, 2, 4 or 8 bytes whose members are all of such
+// sizes comes back in eax:edx, unless its only member (possibly nested, or an array of one) is a
+// float or double, which comes back in st(0); other aggregates use a hidden pointer; an empty one
+// returns nothing.
+static const char *i386SingleScalar(const char *type)
+{
+    type = stripQualifiersAndComments(type);
+    switch (*type)
+    {
+        case _C_STRUCT_B:
+        case _C_UNION_B:
+        {
+            char end = *type == _C_STRUCT_B ? _C_STRUCT_E : _C_UNION_E;
+            const char *p = type + 1;
+            while (*p != '\0' && *p != '=' && *p != end)
+            {
+                p++;
+            }
+            if (*p != '=')
+            {
+                return NULL;
+            }
+            p++;
+            NSUInteger size = 0, alignment = 0;
+            const char *after = __NSGetSizeAndAlignment(p, &size, &alignment, NO);
+            return (*p != end && *after == end) ? i386SingleScalar(p) : NULL;
+        }
+
+        case _C_ARY_B:
+        {
+            char *p;
+            return strtol(type + 1, &p, 10) == 1 ? i386SingleScalar(p) : NULL;
+        }
+
+        default:
+            return type;
+    }
+}
+
+static BOOL i386FitsInRegisters(const char *type)
+{
+    type = stripQualifiersAndComments(type);
+    NSUInteger size = 0, alignment = 0;
+    __NSGetSizeAndAlignment(type, &size, &alignment, NO);
+    if (size != 1 && size != 2 && size != 4 && size != 8)
+    {
+        return NO;
+    }
+
+    if (*type == _C_STRUCT_B || *type == _C_UNION_B)
+    {
+        char end = *type == _C_STRUCT_B ? _C_STRUCT_E : _C_UNION_E;
+        const char *p = type + 1;
+        while (*p != '\0' && *p != '=' && *p != end)
+        {
+            p++;
+        }
+        if (*p == '=')
+        {
+            p++;
+        }
+        while (*p != '\0' && *p != end)
+        {
+            if (!i386FitsInRegisters(p))
+            {
+                return NO;
+            }
+            NSUInteger memberSize = 0, memberAlignment = 0;
+            p = __NSGetSizeAndAlignment(p, &memberSize, &memberAlignment, NO);
+        }
+    }
+    else if (*type == _C_ARY_B)
+    {
+        char *p;
+        strtol(type + 1, &p, 10);
+        return i386FitsInRegisters(p);
+    }
+    return YES;
+}
+
+BOOL __NSI386ResultInMemory(const char *type, NSUInteger size)
+{
+    type = stripQualifiersAndComments(type);
+    return (*type == _C_STRUCT_B || *type == _C_UNION_B) && size != 0 && !i386FitsInRegisters(type);
+}
+
+char __NSI386X87ResultType(const char *type)
+{
+    type = stripQualifiersAndComments(type);
+    if (*type == _C_FLT || *type == _C_DBL || *type == _C_LNG_DBL)
+    {
+        return *type;
+    }
+    if (*type == _C_STRUCT_B || *type == _C_UNION_B)
+    {
+        const char *scalar = i386FitsInRegisters(type) ? i386SingleScalar(type) : NULL;
+        if (scalar != NULL && (*scalar == _C_FLT || *scalar == _C_DBL))
+        {
+            return *scalar;
+        }
+    }
+    return 0;
+}
+#endif
+
 @implementation NSMethodSignature
 
 - (instancetype)initWithObjCTypes:(const char *)types
@@ -487,9 +594,7 @@ void __NSSysVReturnToRegisters(const void *value, const char *type, NSUInteger s
             // type of the return value.
             switch (*stripQualifiersAndComments(_types[0].type))
             {
-#if defined(__arm64__) || defined(__x86_64__)
                 case _C_UNION_B:
-#endif
                 case _C_STRUCT_B:
                 {
 #if defined(__arm64__)
@@ -506,11 +611,10 @@ void __NSSysVReturnToRegisters(const void *value, const char *type, NSUInteger s
                         ++usedGPRegisters;
                     }
 #else
-                    // On i386, structs of 1, 2, 4 and 8 bytes are returned in eax:edx; others are
-                    // written through a hidden pointer that is passed on the stack.
-                    if (ms->size != 1 && ms->size != 2 && ms->size != 4 && ms->size != 8)
+                    // On i386 small aggregates come back in eax:edx or st(0); others are written
+                    // through a hidden pointer that is passed on the stack, ahead of self.
+                    if (__NSI386ResultInMemory(currentType, ms->size))
                     {
-                        // Account for the stret return pointer.
                         _frameLength += sizeof(void *);
                         _stret = YES;
                     }

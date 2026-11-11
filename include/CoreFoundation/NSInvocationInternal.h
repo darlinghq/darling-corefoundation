@@ -33,9 +33,18 @@ void __NSSysVReturnFromRegisters(const void *regs, const char *type, NSUInteger 
 void __NSSysVReturnToRegisters(const void *value, const char *type, NSUInteger size, void *regs);
 #endif
 
+// Sign- or zero-extends a char, short or BOOL in a 4-byte slot to 32 bits.
+void __NSExtendNarrowInteger(void *value, const char *type);
+
 #if defined(__arm64__)
 unsigned __NSARM64DoubleHFACount(const char *type);
-void __NSARM64ExtendToInt(void *value, const char *type);
+#endif
+
+#if defined(__i386__)
+// i386: whether a struct or union result is written through a hidden pointer, and the type
+// ('f', 'd' or 'D') of a result returned in st(0), if any.
+BOOL __NSI386ResultInMemory(const char *type, NSUInteger size);
+char __NSI386X87ResultType(const char *type);
 #endif
 
 extern void _CF_forwarding_prep_0();

@@ -28,6 +28,9 @@ typedef struct { double a; long b; } DoubleInt;         // xmm0:rax
 typedef struct { char a, b, c; } Chars3;                // 3 bytes: hidden pointer on i386
 typedef struct { double a, b, c; } Doubles3;            // 24 bytes: MEMORY
 typedef struct { long a, b, c, d, e; } Big;             // 40 bytes: MEMORY
+typedef struct { float f; } OneFloat;                   // st(0) on i386, xmm0 on x86_64
+typedef struct { struct { double d; } in; } NestedDouble; // likewise
+typedef struct { float f[1]; } FloatArray1;             // likewise
 
 @interface Target : NSObject
 - (double)mixInt:(int)a float:(float)f double:(double)d longLong:(long long)l;
@@ -44,6 +47,12 @@ typedef struct { long a, b, c, d, e; } Big;             // 40 bytes: MEMORY
 - (Chars3)bumpChars3:(Chars3)c;
 - (Doubles3)addDoubles3:(Doubles3)p to:(Doubles3)q withLong:(long)l;
 - (Big)bumpBig:(Big)b;
+- (signed char)negateChar:(signed char)c;
+- (short)negateShort:(short)s;
+- (BOOL)isNonZero:(BOOL)b withChar:(signed char)c short:(short)s;
+- (OneFloat)tripleOneFloat:(OneFloat)f;
+- (NestedDouble)tripleNestedDouble:(NestedDouble)d;
+- (FloatArray1)tripleFloatArray:(FloatArray1)f;
 - (long)eightInts:(int)a :(char)b :(short)c :(long)d :(int)e :(long)f :(unsigned char)g :(long)h;
 - (double)tenDoubles:(double)a :(double)b :(double)c :(double)d :(double)e :(double)f :(double)g :(double)h :(double)i :(double)j;
 - (Doubles2)manyRegisters:(long)a :(long)b :(long)c :(long)d :(Pair)p :(Doubles2)q;
@@ -67,6 +76,12 @@ typedef struct { long a, b, c, d, e; } Big;             // 40 bytes: MEMORY
 - (Chars3)bumpChars3:(Chars3)c { Chars3 r = { c.a + 1, c.b + 1, c.c + 1 }; return r; }
 - (Doubles3)addDoubles3:(Doubles3)p to:(Doubles3)q withLong:(long)l { Doubles3 r = { p.a + q.a, p.b + q.b, p.c + q.c + l }; return r; }
 - (Big)bumpBig:(Big)b { Big r = { b.a + 1, b.b + 1, b.c + 1, b.d + 1, b.e + 1 }; return r; }
+- (signed char)negateChar:(signed char)c { return -c; }
+- (short)negateShort:(short)s { return -s; }
+- (BOOL)isNonZero:(BOOL)b withChar:(signed char)c short:(short)s { return b && c == -3 && s == -300; }
+- (OneFloat)tripleOneFloat:(OneFloat)f { OneFloat r = { f.f * 3 }; return r; }
+- (NestedDouble)tripleNestedDouble:(NestedDouble)d { NestedDouble r = { { d.in.d * 3 } }; return r; }
+- (FloatArray1)tripleFloatArray:(FloatArray1)f { FloatArray1 r = { { f.f[0] * 3 } }; return r; }
 - (long)eightInts:(int)a :(char)b :(short)c :(long)d :(int)e :(long)f :(unsigned char)g :(long)h {
     return a + 2 * b + 3 * c + 4 * d + 5 * e + 6 * f + 7 * g + 8 * h;
 }
@@ -246,6 +261,50 @@ int main(void) {
         report("mixed-class struct when too few integer registers remain", r.a == 15 && r.b == 2.5);
     }
 
+    {
+        SEL s = @selector(isNonZero:withChar:short:); NSInvocation *inv = makeInv(t, s);
+        BOOL b = YES; signed char c = -3; short sh = -300;
+        [inv setArgument:&b atIndex:2]; [inv setArgument:&c atIndex:3]; [inv setArgument:&sh atIndex:4];
+        BOOL r = NO; INVOKE_RET(r, inv);
+        report("narrow integer arguments are widened for the callee", r);
+    }
+    {
+        SEL s = @selector(tripleOneFloat:); NSInvocation *inv = makeInv(t, s);
+        OneFloat f = { 1.5f }; [inv setArgument:&f atIndex:2];
+        OneFloat r = { 0 }; INVOKE_RET(r, inv);
+        report("single-float struct argument and result", r.f == 4.5f);
+    }
+    {
+        SEL s = @selector(tripleNestedDouble:); NSInvocation *inv = makeInv(t, s);
+        NestedDouble d = { { 1.5 } }; [inv setArgument:&d atIndex:2];
+        NestedDouble r = { { 0 } }; INVOKE_RET(r, inv);
+        report("nested single-double struct argument and result", r.in.d == 4.5);
+    }
+    {
+        SEL s = @selector(tripleFloatArray:); NSInvocation *inv = makeInv(t, s);
+        FloatArray1 f = { { 1.5f } }; [inv setArgument:&f atIndex:2];
+        FloatArray1 r = { { 0 } }; INVOKE_RET(r, inv);
+        report("struct with a one-element float array", r.f[0] == 4.5f);
+    }
+    {
+        // Arguments read back through getArgument:atIndex: even when they were split across registers.
+        NSInvocation *inv = makeInv(t, @selector(bumpDoubleInt:));
+        DoubleInt v = { 1.5, 5 }, back = { 0, 0 }; [inv setArgument:&v atIndex:2]; [inv getArgument:&back atIndex:2];
+        NSInvocation *inv2 = makeInv(t, @selector(bumpIntDouble:));
+        IntDouble w = { 7, 2.5 }, wback = { 0, 0 }; [inv2 setArgument:&w atIndex:2]; [inv2 getArgument:&wback atIndex:2];
+        report("split struct arguments read back", back.a == 1.5 && back.b == 5 && wback.a == 7 && wback.b == 2.5);
+    }
+#if defined(__x86_64__)
+    {
+        // The frame lengths a signature reports (as on macOS x86_64): a hidden result pointer adds
+        // nothing, since it travels in a register.
+        NSMethodSignature *s1 = [NSMethodSignature signatureWithObjCTypes:"{?=qqq}@:"];
+        NSMethodSignature *s2 = [NSMethodSignature signatureWithObjCTypes:"{?=qqq}@:qqqqq"];
+        NSMethodSignature *s3 = [NSMethodSignature signatureWithObjCTypes:"@@:dddddddddd"];
+        report("signature frame lengths", [s1 frameLength] == 224 && [s2 frameLength] == 240 && [s3 frameLength] == 240);
+    }
+#endif
+
     // The same through message forwarding: -forwardInvocation: and -forwardingTargetForSelector:.
     {
         Forwarder *f = [[Forwarder alloc] initWithTarget:t];
@@ -273,6 +332,15 @@ int main(void) {
         report("forwarding: 24-byte struct result", d3.a == 11 && d3.b == 22 && d3.c == 133);
         Big b = [(id)f bumpBig:(Big){ 1, 2, 3, 4, 5 }];
         report("forwarding: 40-byte struct result", b.a == 2 && b.e == 6);
+        report("forwarding: signed char result", [(id)f negateChar:5] == -5);
+        report("forwarding: short result", [(id)f negateShort:300] == -300);
+        report("forwarding: narrow integer arguments", [(id)f isNonZero:YES withChar:-3 short:-300]);
+        OneFloat of = [(id)f tripleOneFloat:(OneFloat){ 1.5f }];
+        report("forwarding: single-float struct", of.f == 4.5f);
+        NestedDouble nd = [(id)f tripleNestedDouble:(NestedDouble){ { 1.5 } }];
+        report("forwarding: nested single-double struct", nd.in.d == 4.5);
+        FloatArray1 fa = [(id)f tripleFloatArray:(FloatArray1){ { 1.5f } }];
+        report("forwarding: struct with a one-element float array", fa.f[0] == 4.5f);
         report("forwarding: stack arguments of mixed widths", [(id)f eightInts:1 :2 :3 :4 :5 :6 :7 :8] == 204);
         report("forwarding: ten doubles", [(id)f tenDoubles:1 :2 :3 :4 :5 :6 :7 :8 :9 :10] == 385);
         Doubles2 mr = [(id)f manyRegisters:1 :2 :3 :4 :(Pair){ 100, 200 } :(Doubles2){ 0.5, 1.5 }];

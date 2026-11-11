@@ -117,6 +117,7 @@ __CF_forwarding_prep_0:
 
     lea 0x10(%esp), %eax    // load pointer to return value space on stack
     mov %eax, 4(%esp)       // pass pointer as second argument
+    movl $0x0, 8(%esp)      // no stret pointer
 
     // clear out return value space: eax:edx at 0x00, room for an x87 value, a flag word at 0x20
     movl $0x0, 0x10(%esp)
@@ -184,14 +185,15 @@ __CF_forwarding_prep_1:
     push %ebp
     mov %esp, %ebp          // create a stack frame
 
-    sub $0x8, %esp          // reserve space for args pointer and return value
+    sub $0x10, %esp         // reserve space for the three arguments
     and $-16, %esp          // align stack
 
-    lea 12(%ebp), %eax      // load marg_list, skipping frame pointer, return address, and stret pointer
-    mov %eax, (%esp)        // pass marg_list as first argument
+    lea 8(%ebp), %eax       // load marg_list, skipping frame pointer and return address; the stret
+    mov %eax, (%esp)        // pointer is its first word, as NSMethodSignature lays the frame out
 
     mov 8(%ebp), %eax       // load stret pointer
-    mov %eax, 4(%esp)       // pass as second argument
+    mov %eax, 4(%esp)       // pass as second argument (the result storage)
+    mov %eax, 8(%esp)       // and as the third, which marks the stret entry
 
     call ____forwarding___   // call through
 

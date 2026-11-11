@@ -1,6 +1,7 @@
 #!/bin/sh
 # Copyright (C) 2026 Lubos Dolezel
-# Builds and runs the x86_64 System V ABI host tests (invoke.c, forward.c) on a Linux x86_64 host.
+# Builds and runs the x86_64 System V ABI host tests (invoke.c, forward.c), and the i386 ones
+# (invoke32.c, forward32.c) when 32-bit code can be built, on a Linux x86_64 host.
 # The code under test is extracted from the CoreFoundation sources at build time:
 # the classification helpers from NSMethodSignature.m, __NSGetSizeAndAlignment from
 # NSObjCRuntime.m, and the x86_64 parts of NSInvoke-x86.S and CFForwardingPrep.S.
@@ -14,9 +15,15 @@ python3 - "$src" "$out" <<'PY'
 import sys
 src, out = sys.argv[1] + '/', sys.argv[2] + '/'
 ms = open(src + 'NSMethodSignature.m').read()
-a = ms.index('#if defined(__x86_64__)\n// System V AMD64')
-b = ms.index('#endif\n\n@implementation NSMethodSignature')
-classify = ms[a + len('#if defined(__x86_64__)\n'):b]
+def between(text, start, end):
+    a = text.index(start) + len(start)
+    return text[a:text.index(end, a)]
+extend = between(ms, '// The arm64, x86_64 and i386 ABIs', '#if defined(__x86_64__)\n// System V AMD64')
+extend = '// The arm64, x86_64 and i386 ABIs' + extend
+classify = between(ms, '#if defined(__x86_64__)\n// System V AMD64', '#endif\n\n#if defined(__i386__)')
+classify = '// System V AMD64' + classify
+i386 = between(ms, '#if defined(__i386__)\n// i386 (Darwin) results', '#endif\n\n@implementation NSMethodSignature')
+i386 = '// i386 (Darwin) results' + i386
 rt = open(src + 'NSObjCRuntime.m').read()
 gs = rt[rt.index('const char *__NSGetSizeAndAlignment('):rt.index('const char *NSGetSizeAndAlignment(')]
 gs = gs.replace('@throw [NSException exceptionWithName:NSInvalidArgumentException reason:nil userInfo:nil];', 'abort();')
@@ -69,17 +76,48 @@ void harness_layout(Layout *l, const char *ret, const char **args, unsigned n)
     }
 }
 '''
-open(out + 'lib.c', 'w').write(pre + gs + classify + harness)
+harness32 = '''
+typedef struct { size_t offset[16]; NSUInteger size[16]; unsigned count; NSUInteger frameLength; int stret; NSUInteger retsize; } Layout;
+// Lays out a call the way initWithObjCTypes: does on i386; two words stand in for self and _cmd.
+void harness_layout(Layout *l, const char *ret, const char **args, unsigned n)
+{
+    l->frameLength = 0;
+    NSUInteger sz = 0, al = 0;
+    __NSGetSizeAndAlignment(ret, &sz, &al, NO);
+    l->retsize = sz;
+    l->stret = __NSI386ResultInMemory(ret, sz);
+    if (l->stret) l->frameLength += 4;
+    l->frameLength += 8;
+    l->count = n;
+    for (unsigned i = 0; i < n; i++) {
+        NSUInteger s = 0, a = 0;
+        __NSGetSizeAndAlignment(args[i], &s, &a, NO);
+        NSUInteger fa = MAX(a, sizeof(int));
+        NSUInteger fs = ALIGN_TO(s, fa);
+        l->offset[i] = l->frameLength;
+        l->size[i] = s;
+        l->frameLength += fs;
+    }
+}
+'''
+open(out + 'lib.c', 'w').write(pre + gs + extend + classify + harness)
+open(out + 'lib32.c', 'w').write(pre + gs + extend + i386 + harness32)
 asm = open(src + 'NSInvoke-x86.S').read()
 body = asm[asm.index('#elif defined(__x86_64__)') + len('#elif defined(__x86_64__) // Now the x86-64 version'):asm.index('#elif defined(__arm64__)')]
 body = body.replace('.cfi_personality 155, ___objc_personality_v0', '')
 open(out + 'inv.S', 'w').write('.text\n.globl ___invoke__\n.align 4\n___invoke__:\n' + body)
+body32 = asm[asm.index('#ifdef __i386__') + len('#ifdef __i386__'):asm.index('#elif defined(__x86_64__)')]
+open(out + 'inv32.S', 'w').write('.text\n.globl ___invoke__\n.align 4\n___invoke__:\n' + body32)
 prep = open(src + 'CFForwardingPrep.S').read()
 body = prep[prep.index('#elif __x86_64__') + len('#elif __x86_64__'):prep.index('.globl __CF_forwarding_prep_b\n.align 4, 0x90\n\n__CF_forwarding_prep_b:\n    .cfi_startproc')]
 body = body.replace('.section __TEXT,__text,regular,pure_instructions', '.text').replace('.cfi_personality 155, ___objc_personality_v0', '')
 body = body.replace('_objc_msgSend_stret', 'objc_msgSend_stret').replace('_objc_msgSend', 'objc_msgSend').replace('____forwarding___', 'forwarding_stub')
 body = body.replace('__CF_forwarding_prep_', 'CF_forwarding_prep_')
 open(out + 'prep.S', 'w').write(body)
+body32 = prep[prep.index('#elif __i386__') + len('#elif __i386__'):prep.index('.text\n.global  __CF_forwarding_prep_b')]
+body32 = body32.replace('_objc_msgSend_stret', 'objc_msgSend_stret').replace('_objc_msgSend', 'objc_msgSend').replace('____forwarding___', 'forwarding_stub')
+body32 = body32.replace('__CF_forwarding_prep_', 'CF_forwarding_prep_')
+open(out + 'prep32.S', 'w').write(body32)
 PY
 cd "$out"
 clang -w -c lib.c -o lib.o
@@ -89,3 +127,15 @@ clang -w -O0 -o invoke "$here/invoke.c" lib.o inv.o
 clang -w -O0 -no-pie -o forward "$here/forward.c" lib.o inv.o prep.o
 ./invoke
 ./forward
+# i386, when the host can build 32-bit programs (return small structs in registers as Darwin does)
+if echo 'int main(void){return 0;}' | clang -m32 -x c - -o m32probe 2>/dev/null; then
+    clang -m32 -w -c lib32.c -o lib32.o
+    clang -m32 -w -c -x assembler-with-cpp inv32.S -o inv32.o
+    clang -m32 -w -c -x assembler-with-cpp prep32.S -o prep32.o
+    clang -m32 -w -O0 -freg-struct-return -o invoke32 "$here/invoke32.c" lib32.o inv32.o
+    clang -m32 -w -O0 -freg-struct-return -no-pie -o forward32 "$here/forward32.c" lib32.o inv32.o prep32.o
+    ./invoke32
+    ./forward32
+else
+    echo "no 32-bit toolchain: skipping the i386 tests"
+fi

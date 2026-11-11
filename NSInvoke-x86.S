@@ -9,7 +9,7 @@ ___invoke__:
 #                                //   each), or st(0) as a long double, see NSInvocationInternal.h
 #                 marg_list args,
 #                 size_t frame_length,
-#                 const char *return_type)
+#                 char return_type)
 
 #ifdef __i386__
 
@@ -46,8 +46,7 @@ Lpush:
   #next, check to see if we need to put something else (ie something from
   #the x87 registers) into *retdata instead. 
 
-  mov 8+16(%ebp), %eax #$eax == return_type
-  mov (%eax), %al
+  mov 8+16(%ebp), %eax #the return type character (passed by value, not through a pointer)
   cmpb $0x44, %al # if (returnType[0] == 'D') // long double
   je Llongdoubleret
   cmpb $0x64, %al # if (returnType[0] == 'd') // double

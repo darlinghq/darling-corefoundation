@@ -9,6 +9,7 @@
 typedef unsigned long NSUInteger; typedef int BOOL;
 #define SYSV_RETURN_REGS_SIZE 64
 void ___invoke__(void *send, void *retdata, void *args, size_t len, char rettype, unsigned hfa);
+void __NSExtendNarrowInteger(void *value, const char *type);
 void __NSSysVStoreArgument(void *frame, size_t offset, NSUInteger size, const void *value);
 BOOL __NSSysVReturnsInX87(const char *type);
 void __NSSysVReturnFromRegisters(const void *regs, const char *type, NSUInteger size, void *value);
@@ -145,6 +146,27 @@ int main(void)
         invoke(f_spill_dstruct, "d", t, v, 5, &r); IS("five double pairs (last spills to the stack)", r == 1 + 4 + 5 + 8 + 9 + 10); }
     {   LD x = {5, 2.5}, r; long c = 1, d = 2, e = 3, f = 4; const char *t[] = { "q", "q", "q", "q", "{LD=qd}" }; const void *v[] = { &c, &d, &e, &f, &x };
         invoke(f_mixmany, "{LD=qd}", t, v, 5, &r); IS("INTEGER,SSE struct when only one integer register is left (stack)", r.a == 9 && r.b == 2.5); }
+    {   // Frame lengths NSMethodSignature reports on macOS x86_64 (observed under Rosetta, see MAC-EVIDENCE.md);
+        // the two leading integer registers stand in for self and _cmd.
+        struct { const char *ret; const char *arg; unsigned count; NSUInteger frame; const char *name; } cases[] = {
+            { "{?=qqq}", "q", 0, 224, "hidden result pointer adds nothing to the frame" },
+            { "{?=qqq}", "q", 5, 240, "stack arguments after a hidden result pointer" },
+            { "d", "d", 10, 240, "ten doubles, two on the stack" },
+            { "v", "q", 7, 248, "seven integers, three on the stack" },
+            { "v", "{?=qq}", 3, 240, "third integer pair on the stack" },
+            { "v", "{?=dd}", 5, 240, "fifth double pair on the stack" },
+            { "v", "c", 4, 224, "narrow integers stay in registers" },
+        };
+        for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+            const char *t[16]; for (unsigned k = 0; k < cases[i].count; k++) t[k] = cases[i].arg;
+            Layout l; harness_layout(&l, cases[i].ret, t, cases[i].count);
+            report(cases[i].name, l.frameLength == cases[i].frame);
+        }
+    }
+    {   unsigned char slot[8] = { 0xff, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa }; __NSExtendNarrowInteger(slot, "c");
+        report("signed char argument widened to 32 bits", *(int32_t *)slot == -1); }
+    {   unsigned char slot[8] = { 0x01, 0x01, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa }; __NSExtendNarrowInteger(slot, "B");
+        report("BOOL argument widened to 32 bits", *(uint32_t *)slot == 1); }
     printf("%d/%d\n", total - fails, total);
     return fails != 0;
 }

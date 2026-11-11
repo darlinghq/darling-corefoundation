@@ -277,7 +277,13 @@
     // Register slots (x0-x7 and d0-d7) are 8 bytes wide; stack slots of small types are packed.
     if (idx > 0 && argInfo->offset < 0x80)
     {
-        __NSARM64ExtendToInt(arg, argInfo->type);
+        __NSExtendNarrowInteger(arg, argInfo->type);
+    }
+#elif defined(__x86_64__) || defined(__i386__)
+    // Every argument occupies a whole word or more here, and callers widen narrow integers.
+    if (idx > 0)
+    {
+        __NSExtendNarrowInteger(arg, argInfo->type);
     }
 #endif
 
@@ -337,7 +343,13 @@ static BOOL isBlock(id object)
         __NSSysVReturnFromRegisters(regs, returnType, [_signature methodReturnLength], _retdata);
     }
 #else
-    char rettype = stripQualifiersAndComments([_signature methodReturnType])[0];
+    // __invoke__ takes the result of a float, double or long double, or of a struct holding
+    // only a float or double, from st(0).
+    char rettype = __NSI386X87ResultType([_signature methodReturnType]);
+    if (rettype == 0)
+    {
+        rettype = stripQualifiersAndComments([_signature methodReturnType])[0];
+    }
 
     if ([_signature _stret])
     {
@@ -371,10 +383,6 @@ static BOOL isBlock(id object)
     }
 
     IMP imp;
-#if defined(__i386__)
-    char returnType;
-#endif
-
     if (isBlock([self target]))
     {
         struct Block_layout *block_layout = (struct Block_layout *) target;
@@ -393,8 +401,7 @@ static BOOL isBlock(id object)
             imp = (IMP)&objc_msgSend_fpret;
         }
     #elif defined(__i386__)
-        else if ((returnType = stripQualifiersAndComments([_signature methodReturnType])[0]) == _C_FLT
-                 || returnType == _C_DBL || returnType == _C_LNG_DBL)
+        else if (__NSI386X87ResultType([_signature methodReturnType]) != 0)
         {
             imp = (IMP)&objc_msgSend_fpret;
         }
