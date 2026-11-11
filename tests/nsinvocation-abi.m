@@ -292,8 +292,9 @@ int main(void) {
         check("forwarding a homogeneous aggregate on the stack", [(id)f hfaSpill:1 :2 :3 :4 :5 :6 :7 quad:q tail:5] == want);
         [f release];
     }
+#if defined(__arm64__)
     {
-        // The callee gets the invocation's own copy of the struct, as on macOS: a parameter it
+        // The callee gets the invocation's own copy of the struct, as on macOS arm64: a parameter it
         // modifies stays modified in the invocation.
         Tri a = { 1, 2, 3 };
         NSInvocation *inv = makeInv(t, @selector(clobber:));
@@ -301,6 +302,7 @@ int main(void) {
         Tri r, back; [inv getReturnValue:&r]; [inv getArgument:&back atIndex:2];
         check("callee changing a reference parameter changes the stored argument", r.a == 0 && back.a == 0 && back.b == 0 && back.c == 0);
     }
+#endif
     {
         // A default forwardInvocation: reached through a super send raises
         // instead of recursing.
