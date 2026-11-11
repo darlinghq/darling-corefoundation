@@ -158,6 +158,7 @@ set(cf_sources
 	NSObject.m
 	NSOrderedSet.m
 	NSOutputStream.m
+	NSPort.m
 	NSPropertyList.m
 	NSRunLoop.m
 	NSSet.m
