@@ -92,6 +92,13 @@ NSString *const NSURLVolumeSupportsVolumeSizesKey = @"NSURLVolumeSupportsVolumeS
 NSString *const NSURLVolumeSupportsRenamingKey = @"NSURLVolumeSupportsRenamingKey";
 NSString *const NSURLVolumeSupportsAdvisoryFileLockingKey = @"NSURLVolumeSupportsAdvisoryFileLockingKey";
 NSString *const NSURLVolumeSupportsExtendedSecurityKey = @"NSURLVolumeSupportsExtendedSecurityKey";
+NSString *const NSURLVolumeSupportsCompressionKey = @"NSURLVolumeSupportsCompressionKey";
+NSString *const NSURLVolumeSupportsFileCloningKey = @"NSURLVolumeSupportsFileCloningKey";
+NSString *const NSURLVolumeSupportsSwapRenamingKey = @"NSURLVolumeSupportsSwapRenamingKey";
+NSString *const NSURLVolumeSupportsExclusiveRenamingKey = @"NSURLVolumeSupportsExclusiveRenamingKey";
+NSString *const NSURLVolumeSupportsImmutableFilesKey = @"NSURLVolumeSupportsImmutableFilesKey";
+NSString *const NSURLVolumeSupportsAccessPermissionsKey = @"NSURLVolumeSupportsAccessPermissionsKey";
+NSString *const NSURLVolumeSupportsFileProtectionKey = @"NSURLVolumeSupportsFileProtectionKey";
 NSString *const NSURLVolumeIsBrowsableKey = @"NSURLVolumeIsBrowsableKey";
 NSString *const NSURLVolumeMaximumFileSizeKey = @"NSURLVolumeMaximumFileSizeKey";
 NSString *const NSURLVolumeIsEjectableKey = @"NSURLVolumeIsEjectableKey";
@@ -137,36 +144,41 @@ NSString *const NSURLVolumeAvailableCapacityForImportantUsageKey = @"NSURLVolume
 NSString *const NSURLVolumeAvailableCapacityForOpportunisticUsageKey = @"NSURLVolumeAvailableCapacityForOpportunisticUsageKey";
 NSString *const NSURLVolumeIsEncryptedKey = @"NSURLVolumeIsEncryptedKey";
 NSString *const NSURLVolumeIsRootFileSystemKey = @"NSURLVolumeIsRootFileSystemKey";
-NSString *const NSURLVolumeSupportsCompressionKey = @"NSURLVolumeSupportsCompressionKey";
 
 NSURLUbiquitousItemDownloadingStatus const NSURLUbiquitousItemDownloadingStatusNotDownloaded = @"NSURLUbiquitousItemDownloadingStatusNotDownloaded";
 
+// kCFErrorUnderlyingErrorKey values must be CFErrors: CFError's description reads them as such.
 static void posixError(CFErrorRef *error) {
+    int saved_errno = errno;
     const CFStringRef keys[1] = {
         kCFErrorUnderlyingErrorKey,
     };
-    CFStringRef err = CFStringCreateWithFormat(kCFAllocatorDefault, NULL, CFSTR("%s"), strerror(errno));
+    CFErrorRef underlyingError = CFErrorCreate(kCFAllocatorDefault, kCFErrorDomainPOSIX, saved_errno, NULL);
     CFTypeRef values[1] = {
-        err,
+        underlyingError,
     };
 
     if (error != NULL)
     {
-        *error = CFErrorCreateWithUserInfoKeysAndValues(kCFAllocatorDefault, kCFErrorDomainPOSIX, errno, (const void *const *)keys, (const void *const *)values, 1);
+        *error = CFErrorCreateWithUserInfoKeysAndValues(kCFAllocatorDefault, kCFErrorDomainPOSIX, saved_errno, (const void *const *)keys, (const void *const *)values, 1);
     }
 
-    CFRelease(err);
+    CFRelease(underlyingError);
 }
 
 static void dlError(CFErrorRef *error) {
     int saved_errno = errno;
+    const CFStringRef descriptionKey = kCFErrorLocalizedDescriptionKey;
+    CFStringRef description = CFStringCreateWithCString(kCFAllocatorDefault, dlerror(), kCFStringEncodingUTF8);
+    CFTypeRef descriptionValue = description;
+    CFErrorRef underlyingError = CFErrorCreateWithUserInfoKeysAndValues(kCFAllocatorDefault, kCFErrorDomainPOSIX, saved_errno, (const void *const *) &descriptionKey, (const void *const *) &descriptionValue, 1);
     const CFStringRef key = kCFErrorUnderlyingErrorKey;
-    CFStringRef underlyingError = CFStringCreateWithCString(kCFAllocatorDefault, dlerror(), kCFStringEncodingUTF8);
     CFTypeRef value = underlyingError;
-    
+
     if(error != NULL)
-        *error = CFErrorCreateWithUserInfoKeysAndValues(kCFAllocatorDefault, kCFErrorDomainPOSIX, saved_errno, (const void *const *) &key, (const void *const *) &value, 1); 
+        *error = CFErrorCreateWithUserInfoKeysAndValues(kCFAllocatorDefault, kCFErrorDomainPOSIX, saved_errno, (const void *const *) &key, (const void *const *) &value, 1);
     CFRelease(underlyingError);
+    CFRelease(description);
 };
 
 static Boolean CFURLStat(CFURLRef url, struct stat *info) {
@@ -174,7 +186,8 @@ static Boolean CFURLStat(CFURLRef url, struct stat *info) {
 
     if (CFURLGetFileSystemRepresentation(url, true, path, PATH_MAX))
     {
-        return stat(path, info) != -1;
+        // Resource metadata describes the link itself, including a dangling link.
+        return lstat(path, info) != -1;
     }
 
     return false;
@@ -296,8 +309,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
         // Key for the resource’s creation date, returned as a CFDate object if the volume supports creation dates, or nil if creation dates are unsupported.
         if (CFURLStat(url, &info))
         {
-            CFTimeInterval t = (CFTimeInterval)(info.st_ctime * NSEC_PER_SEC + info.st_ctimespec.tv_nsec) / (CFTimeInterval)NSEC_PER_SEC;
-            value = CFDateCreate(kCFAllocatorDefault, t);
+            value = CFDateCreate(kCFAllocatorDefault, _CFAbsoluteTimeFromFileTimeSpec(info.st_ctimespec));
         }
         else
         {
@@ -308,8 +320,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
     {
         if (CFURLStat(url, &info))
         {
-            CFTimeInterval t = (CFTimeInterval)(info.st_atime * NSEC_PER_SEC + info.st_atimespec.tv_nsec) / (CFTimeInterval)NSEC_PER_SEC;
-            value = CFDateCreate(kCFAllocatorDefault, t);
+            value = CFDateCreate(kCFAllocatorDefault, _CFAbsoluteTimeFromFileTimeSpec(info.st_atimespec));
         }
         else
         {
@@ -320,8 +331,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
     {
         if (CFURLStat(url, &info))
         {
-            CFTimeInterval t = (CFTimeInterval)(info.st_mtime * NSEC_PER_SEC + info.st_mtimespec.tv_nsec) / (CFTimeInterval)NSEC_PER_SEC;
-            value = CFDateCreate(kCFAllocatorDefault, t);
+            value = CFDateCreate(kCFAllocatorDefault, _CFAbsoluteTimeFromFileTimeSpec(info.st_mtimespec));
         }
         else
         {
@@ -332,8 +342,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
     {
         if (CFURLStat(url, &info))
         {
-            CFTimeInterval t = (CFTimeInterval)(info.st_mtime * NSEC_PER_SEC + info.st_mtimespec.tv_nsec) / (CFTimeInterval)NSEC_PER_SEC;
-            value = CFDateCreate(kCFAllocatorDefault, t);
+            value = CFDateCreate(kCFAllocatorDefault, _CFAbsoluteTimeFromFileTimeSpec(info.st_mtimespec));
         }
         else
         {
@@ -439,6 +448,18 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
     {
         
     }
+    else if (CFEqual(key, kCFURLFileSizeKey))
+    {
+        if (CFURLStat(url, &info))
+        {
+            int64_t size = info.st_size;
+            value = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt64Type, &size);
+        }
+        else
+        {
+            posixError(error);
+        }
+    }
     else if (CFEqual(key, kCFURLPreferredIOBlockSizeKey))
     {
         // Key for the optimal block size to use when reading or writing this file's data, returned as a CFNumber object, or NULL if the preferred size is not available.
@@ -526,6 +547,20 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
                 value = CFNumberCreate(kCFAllocatorDefault, kCFNumberLongLongType, &b);
             }
         }
+    }
+    else if (CFEqual(key, kCFURLVolumeSupportsFileCloningKey) ||
+             CFEqual(key, kCFURLVolumeSupportsSwapRenamingKey) ||
+             CFEqual(key, kCFURLVolumeSupportsExclusiveRenamingKey) ||
+             CFEqual(key, kCFURLVolumeSupportsImmutableFilesKey) ||
+             CFEqual(key, kCFURLVolumeSupportsAccessPermissionsKey) ||
+             CFEqual(key, kCFURLVolumeSupportsFileProtectionKey) ||
+             CFEqual(key, kCFURLVolumeSupportsCompressionKey))
+    {
+        // These capabilities are not probed per file system yet: every volume is
+        // reported as lacking them. That is the conservative answer (callers fall
+        // back to the generic code path) and has not been checked against macOS
+        // for any particular file system.
+        value = kCFBooleanFalse;
     }
     else if (CFEqual(key, kCFURLVolumeTotalCapacityKey))
     {
@@ -687,6 +722,7 @@ CFDictionaryRef CFURLCopyResourcePropertiesForKeys(CFURLRef url, CFArrayRef keys
     CFMutableDictionaryRef resourceInfo = CFURLResourceInfo(url);
     CFIndex count = CFArrayGetCount(keys);
     CFIndex propCount = 0;
+    Boolean failed = false;
     if (count > STACK_BUFFER_SIZE)
     {
         property_keys = malloc(sizeof(CFTypeRef) * count);
@@ -714,7 +750,22 @@ CFDictionaryRef CFURLCopyResourcePropertiesForKeys(CFURLRef url, CFArrayRef keys
 
         if (value == NULL)
         {
-            value = CFURLCreatePropertyForKey(url, key, error);
+            CFErrorRef propertyError = NULL;
+            value = CFURLCreatePropertyForKey(url, key, &propertyError);
+            if (value == NULL && propertyError != NULL)
+            {
+                // Like macOS, fail the whole request (e.g. a missing file) instead of leaving the key out.
+                if (error != NULL)
+                {
+                    *error = propertyError;
+                }
+                else
+                {
+                    CFRelease(propertyError);
+                }
+                failed = true;
+                break;
+            }
         }
         else
         {
@@ -734,7 +785,10 @@ CFDictionaryRef CFURLCopyResourcePropertiesForKeys(CFURLRef url, CFArrayRef keys
 
     CFURLResourceInfoRelease(resourceInfo);
 
-    props = CFDictionaryCreate(kCFAllocatorDefault, property_keys, property_values, propCount, &kCFCopyStringDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    if (!failed)
+    {
+        props = CFDictionaryCreate(kCFAllocatorDefault, property_keys, property_values, propCount, &kCFCopyStringDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    }
 
     if (property_keys != &stack_keys[0])
     {

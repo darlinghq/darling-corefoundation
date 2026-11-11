@@ -100,19 +100,21 @@ static void cocoaError(CFErrorRef *error, CFIndex code, CFURLRef url, CFStringRe
 
 static void posixError(CFErrorRef *error, CFURLRef url, CFStringRef path) {
     if (error) {
+        int saved_errno = errno;
         const CFStringRef keys[3] = {
             kCFErrorUnderlyingErrorKey,
             NSURLErrorKey,
             NSFilePathErrorKey
         };
-        CFStringRef err = CFStringCreateWithFormat(kCFAllocatorDefault, NULL, CFSTR("%s"), strerror(errno));
+        // kCFErrorUnderlyingErrorKey values must be CFErrors: CFError's description reads them as such.
+        CFErrorRef underlyingError = CFErrorCreate(kCFAllocatorDefault, kCFErrorDomainPOSIX, saved_errno, NULL);
         CFTypeRef values[3] = {
-            err,
+            underlyingError,
             url,
             path,
         };
-        *error = CFErrorCreateWithUserInfoKeysAndValues(kCFAllocatorDefault, kCFErrorDomainPOSIX, errno, (const void *const *)keys, (const void *const *)values, 3);
-        CFRelease(err);
+        *error = CFErrorCreateWithUserInfoKeysAndValues(kCFAllocatorDefault, kCFErrorDomainPOSIX, saved_errno, (const void *const *)keys, (const void *const *)values, 3);
+        CFRelease(underlyingError);
     }
 }
 

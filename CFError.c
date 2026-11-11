@@ -297,7 +297,8 @@ CFStringRef _CFErrorCreateLocalizedRecoverySuggestion(CFErrorRef err) {
 */
 static void userInfoKeyValueShow(const void *key, const void *value, void *context) {
     CFStringRef desc;
-    if (CFEqual(key, kCFErrorUnderlyingErrorKey) && (desc = CFErrorCopyDescription((CFErrorRef)value))) {	// We check desc, see <rdar://problem/8415727>
+    // Callers may store a non-error value under the underlying-error key; describe it with %@ instead of reading it as a CFError.
+    if (CFEqual(key, kCFErrorUnderlyingErrorKey) && CFGetTypeID(value) == CFErrorGetTypeID() && (desc = CFErrorCopyDescription((CFErrorRef)value))) {	// We check desc, see <rdar://problem/8415727>
 	CFStringAppendFormat((CFMutableStringRef)context, NULL, CFSTR("%@=%p \"%@\", "), key, value, desc); 
 	CFRelease(desc);
     } else {
