@@ -1,6 +1,6 @@
 // Copyright (C) 2026 Lubos Dolezel
 //
-// Guest test: unset NSDateComponents fields are NSUndefinedDateComponent,
+// Guest test: unset NSDateComponents fields are NSDateComponentUndefined,
 // NSDate supports secure coding, and calendars created from all sixteen
 // identifiers (including Chinese) do basic arithmetic.
 #import <Foundation/Foundation.h>
@@ -16,11 +16,11 @@ int main(void)
 {
     @autoreleasepool {
         NSDateComponents *c = [[NSDateComponents alloc] init];
-        check("year undefined", [c year] == NSUndefinedDateComponent);
-        check("month undefined", [c month] == NSUndefinedDateComponent);
-        check("day undefined", [c day] == NSUndefinedDateComponent);
-        check("hour undefined", [c hour] == NSUndefinedDateComponent);
-        check("weekday undefined", [c weekday] == NSUndefinedDateComponent);
+        check("year undefined", [c year] == NSDateComponentUndefined);
+        check("month undefined", [c month] == NSDateComponentUndefined);
+        check("day undefined", [c day] == NSDateComponentUndefined);
+        check("hour undefined", [c hour] == NSDateComponentUndefined);
+        check("weekday undefined", [c weekday] == NSDateComponentUndefined);
         check("NSDate supports secure coding", [NSDate supportsSecureCoding]);
 
         NSCalendar *chinese = [[NSCalendar alloc] initWithCalendarIdentifier:NSCalendarIdentifierChinese];
