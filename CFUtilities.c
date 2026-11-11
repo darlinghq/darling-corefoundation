@@ -704,9 +704,18 @@ CF_PRIVATE void _CFLogSimple(int32_t lev, char *format, ...) {
 
 void CFLog(int32_t lev, CFStringRef format, ...) {
     va_list args;
-    va_start(args, format); 
+    va_start(args, format);
     _CFLogvEx2(NULL, NULL, NULL, NULL, lev, format, args);
     va_end(args);
+}
+
+// Existence of CFLogTest, _CFWebServicesCopyProviderInfo and the two kCFWebServices* constants in
+// CoreFoundation was confirmed on macOS by symbol listing; the argument types and the string values
+// here are inferred from the callers and have not been checked against macOS.
+// SPI used by Apple apps (e.g. Automator, TextEdit) for test/diagnostic logging. Callers pass
+// 0 and an already formatted message; log it at debug level so it stays out of normal output.
+void CFLogTest(int32_t unused, CFStringRef message) {
+    if (message) CFLog(kCFLogLevelDebug, CFSTR("%@"), message);
 }
 
 
@@ -1098,4 +1107,14 @@ CF_PRIVATE Boolean _CFReadMappedFromFile(CFStringRef path, Boolean map, Boolean 
     *outBytes = bytes;
     *outLength = length;
     return true;
+}
+
+CONST_STRING_DECL(kCFWebServicesTypeWebSearch, "WebSearch")
+CONST_STRING_DECL(kCFWebServicesProviderDefaultDisplayNameKey, "DefaultDisplayName")
+
+// Darling has no web service provider configuration, so no provider is known for any service
+// type; callers treat NULL as "no provider" (e.g. they hide or disable a web search menu item).
+CFDictionaryRef _CFWebServicesCopyProviderInfo(CFStringRef serviceType, void *reserved)
+{
+    return NULL;
 }

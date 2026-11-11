@@ -133,12 +133,11 @@ CFStringTokenizerRef CFStringTokenizerCreate(CFAllocatorRef allocator, CFStringR
     return tokenizer;
 }
 
-/*
-This requires a fairly massive database and heuristic modeling of langauge.
 CFStringRef CFStringTokenizerCopyBestStringLanguage(CFStringRef string, CFRange range) {
-
+	(void)string;
+	(void)range;
+	return NULL;
 }
-*/
 
 void CFStringTokenizerSetString(CFStringTokenizerRef tokenizer, CFStringRef string, CFRange range) {
 
@@ -196,4 +195,3 @@ CFIndex CFStringTokenizerGetCurrentSubTokens(CFStringTokenizerRef tokenizer, CFR
 
 }
 */
-

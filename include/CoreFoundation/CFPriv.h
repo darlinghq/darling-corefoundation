@@ -663,6 +663,12 @@ void __CFRunLoopSetOptionsReason(int opts, CFStringRef reason);
 // i'm guessing this is related to Marzipan (Apple's name for UIKit on macOS)
 int _CFMZEnabled(void);
 
+// Web service providers (e.g. the web search engine offered by "Search With ..." menu items).
+// The second argument's meaning is unknown; callers seen so far pass NULL.
+CF_EXPORT const CFStringRef kCFWebServicesTypeWebSearch;
+CF_EXPORT const CFStringRef kCFWebServicesProviderDefaultDisplayNameKey;
+CF_EXPORT CFDictionaryRef _CFWebServicesCopyProviderInfo(CFStringRef serviceType, void *reserved);
+
 CF_EXTERN_C_END
 
 #endif /* ! __COREFOUNDATION_CFPRIV__ */
