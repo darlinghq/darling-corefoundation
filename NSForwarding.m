@@ -34,6 +34,7 @@ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
 #import <stdio.h>
 
 #import "NSBlockInvocationInternal.h"
+#import "NSInvocationInternal.h"
 
 #define ALIGN_TO(value, alignment) \
     (((value) % (alignment)) ? \
@@ -48,7 +49,8 @@ struct objc_sendv_margs {
     uintptr_t stackArgs[];
 };
 
-id ___forwarding___(struct objc_sendv_margs *args, void *returnStorage)
+// indirectResult is the caller's x8 on arm64 (unused elsewhere).
+id ___forwarding___(struct objc_sendv_margs *args, void *returnStorage, void *indirectResult)
 {
     id self = (id)args->a[0];
     SEL _cmd = (SEL)args->a[1];
@@ -132,7 +134,19 @@ id ___forwarding___(struct objc_sendv_margs *args, void *returnStorage)
     }
 
     [target forwardInvocation:inv];
+#if defined(__arm64__)
+    if ([signature _stret])
+    {
+        [inv getReturnValue:indirectResult];
+    }
+    else
+    {
+        [inv getReturnValue:returnStorage];
+        __NSARM64ExtendToInt(returnStorage, returnType);
+    }
+#else
     [inv getReturnValue:returnStorage];
+#endif
     return nil;
 }
 

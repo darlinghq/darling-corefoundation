@@ -17,6 +17,88 @@
 
 extern void __CFStringAppendBytes(CFMutableStringRef, const char *, CFIndex, CFStringEncoding);
 
+#if defined(__arm64__)
+// AAPCS64 passes and returns structs made of one to four doubles in d registers.
+// Float aggregates are not recognised.
+unsigned __NSARM64DoubleHFACount(const char *type)
+{
+    type = stripQualifiersAndComments(type);
+    if (*type != _C_STRUCT_B)
+    {
+        return 0;
+    }
+
+    unsigned count = 0, depth = 0;
+    for (const char *p = type; *p; p++)
+    {
+        if (*p == _C_STRUCT_B)
+        {
+            p = strchr(p, '=');
+            if (p == NULL)
+            {
+                return 0;
+            }
+            depth++;
+        }
+        else if (*p == _C_STRUCT_E)
+        {
+            if (--depth == 0)
+            {
+                return count;
+            }
+        }
+        else if (*p == '"')
+        {
+            p = strchr(p + 1, '"');
+            if (p == NULL)
+            {
+                return 0;
+            }
+        }
+        else if (*p != _C_DBL || ++count > 4)
+        {
+            return 0;
+        }
+    }
+    return 0;
+}
+
+// Apple's arm64 ABI extends integer arguments and results narrower than int to 32 bits
+// (callers extend register arguments, callees extend results), and code compiled for it
+// relies on that. value holds a value of the given type in the low bytes of a 4+ byte slot.
+void __NSARM64ExtendToInt(void *value, const char *type)
+{
+    switch (*stripQualifiersAndComments(type))
+    {
+        case _C_CHR:
+        {
+            int32_t extended = *(int8_t *)value;
+            memcpy(value, &extended, sizeof(extended));
+            break;
+        }
+        case _C_SHT:
+        {
+            int32_t extended = *(int16_t *)value;
+            memcpy(value, &extended, sizeof(extended));
+            break;
+        }
+        case _C_UCHR:
+        case _C_BOOL:
+        {
+            uint32_t extended = *(uint8_t *)value;
+            memcpy(value, &extended, sizeof(extended));
+            break;
+        }
+        case _C_USHT:
+        {
+            uint32_t extended = *(uint16_t *)value;
+            memcpy(value, &extended, sizeof(extended));
+            break;
+        }
+    }
+}
+#endif
+
 @implementation NSMethodSignature
 
 - (instancetype)initWithObjCTypes:(const char *)types
@@ -43,7 +125,13 @@ extern void __CFStringAppendBytes(CFMutableStringRef, const char *, CFIndex, CFS
     const char *currentType = types;
     const char *nextType = types;
 
-#ifdef __LP64__
+#if defined(__arm64__)
+    // AAPCS64 frame, as used by __invoke__ and __CF_forwarding_prep_0: x0-x7 at 0x0,
+    // d0-d7 at 0x40 and stack arguments from 0x80.
+    unsigned short usedGPRegisters = 0;
+    unsigned short usedFPRegisters = 0;
+    _frameLength = 0x80;
+#elif defined(__LP64__)
     // On x86-64, the first few arguments are passed in registers as long as
     // they satisfy certain conditions. __CF_forwarding_prep and __invoke__
     // pack and unpack all register values into a 0xe0-sized block preceeding
@@ -128,8 +216,15 @@ extern void __CFStringAppendBytes(CFMutableStringRef, const char *, CFIndex, CFS
             // type of the return value.
             switch (*stripQualifiersAndComments(_types[0].type))
             {
+#if defined(__arm64__)
+                case _C_UNION_B:
+#endif
                 case _C_STRUCT_B:
                 {
+#if defined(__arm64__)
+                    // Larger results, other than double aggregates, are returned through x8.
+                    _stret = ms->size > 16 && __NSARM64DoubleHFACount(currentType) == 0;
+#else
                     if (frameSize > sizeof(int))
                     {
                         // Account for the stret return pointer.
@@ -140,6 +235,7 @@ extern void __CFStringAppendBytes(CFMutableStringRef, const char *, CFIndex, CFS
                         ++usedGPRegisters;
 #endif
                     }
+#endif
                     break;
                 }
 
@@ -152,6 +248,51 @@ extern void __CFStringAppendBytes(CFMutableStringRef, const char *, CFIndex, CFS
         {
 #if __arm__
             _frameLength = ALIGN_TO(_frameLength, frameAlignment);
+#elif defined(__arm64__)
+            const char *argType = stripQualifiersAndComments(currentType);
+            unsigned hfaCount = __NSARM64DoubleHFACount(argType);
+            BOOL isFP = argType[0] == _C_FLT || argType[0] == _C_DBL || argType[0] == 'D';
+            BOOL inRegisters = NO;
+            if (isFP || hfaCount)
+            {
+                unsigned short registersNeeded = isFP ? 1 : hfaCount;
+                if (usedFPRegisters + registersNeeded <= 8)
+                {
+                    _types[_count].offset = 0x40 + usedFPRegisters * 8;
+                    usedFPRegisters += registersNeeded;
+                    inRegisters = YES;
+                }
+                else
+                {
+                    usedFPRegisters = 8;
+                }
+            }
+            else if (ms->size <= 16)
+            {
+                unsigned short registersNeeded = ALIGN_TO(ms->size, 8) / 8;
+                if (usedGPRegisters + registersNeeded <= 8)
+                {
+                    _types[_count].offset = usedGPRegisters * 8;
+                    usedGPRegisters += registersNeeded;
+                    inRegisters = YES;
+                }
+                else
+                {
+                    usedGPRegisters = 8;
+                }
+            }
+            // FIXME: structs over 16 bytes (other than double aggregates) should be passed by reference.
+            if (!inRegisters)
+            {
+                // Apple's arm64 ABI packs scalar stack arguments by their own size and alignment,
+                // but aggregates still take 8-byte-aligned slots rounded up to 8 bytes.
+                BOOL isAggregate = argType[0] == _C_STRUCT_B || argType[0] == _C_UNION_B || argType[0] == _C_ARY_B;
+                NSUInteger stackAlignment = isAggregate ? MAX(ms->alignment, 8) : ms->alignment;
+                NSUInteger stackSize = isAggregate ? ALIGN_TO(ms->size, 8) : ms->size;
+                _frameLength = ALIGN_TO(_frameLength, stackAlignment);
+                _types[_count].offset = _frameLength;
+                _frameLength += stackSize;
+            }
 #elif __LP64__
             // FIXME: This is far from being a complete implementation of
             // the x86-64 calling convention.
@@ -183,6 +324,11 @@ extern void __CFStringAppendBytes(CFMutableStringRef, const char *, CFIndex, CFS
 
         _count++;
     }
+
+#if defined(__arm64__)
+    // __invoke__ copies stack arguments in 8-byte words.
+    _frameLength = ALIGN_TO(_frameLength, 8);
+#endif
 
     // Check whether the method is oneway by reading all the
     // qualifiers of the return type.
