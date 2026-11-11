@@ -165,6 +165,41 @@ static inline void mutateError(id self, SEL _cmd, int err) {
     }
 }
 
+- (void)replaceCharactersInRange:(NSRange)range withCharacters:(const UniChar *)characters length:(NSUInteger)length
+{
+    if (_CFStringIsMutable((CFStringRef)self))
+    {
+        CFStringRef temp = CFStringCreateWithCharactersNoCopy(kCFAllocatorSystemDefault, characters, length, kCFAllocatorNull);
+        if (temp) {
+            CFStringReplace((CFMutableStringRef)self, CFRangeMake(range.location, range.length), temp);
+            CFRelease(temp);
+        }
+    }
+    else
+    {
+        NSInvalidMutation();
+    }
+}
+
+- (void)replaceCharactersInRange:(NSRange)range withCString:(const char *)cString length:(NSUInteger)length
+{
+    if (_CFStringIsMutable((CFStringRef)self))
+    {
+        CFStringRef temp = CFStringCreateWithBytesNoCopy(kCFAllocatorSystemDefault, (const uint8_t *)cString, length, kCFStringEncodingUTF8, false, kCFAllocatorNull);
+        if (!temp) {
+            temp = CFStringCreateWithBytesNoCopy(kCFAllocatorSystemDefault, (const uint8_t *)cString, length, kCFStringEncodingASCII, false, kCFAllocatorNull);
+        }
+        if (temp) {
+            CFStringReplace((CFMutableStringRef)self, CFRangeMake(range.location, range.length), temp);
+            CFRelease(temp);
+        }
+    }
+    else
+    {
+        NSInvalidMutation();
+    }
+}
+
 - (BOOL)_isCString
 {
     return __CFStringIsEightBit((CFStringRef)self);

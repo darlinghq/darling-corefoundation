@@ -2382,7 +2382,7 @@ static Boolean _CFPropertyListCreateFromUTF8Data(CFAllocatorRef allocator, CFDat
     buf += skipBytes;
     
     pInfo->begin = buf;
-    pInfo->end = buf+length;
+    pInfo->end = (const char *)CFDataGetBytePtr(xmlData) + length;
     pInfo->curr = buf;
     pInfo->allocator = allocator;
     pInfo->error = NULL;
