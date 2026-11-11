@@ -38,6 +38,7 @@ void __NSExtendNarrowInteger(void *value, const char *type);
 
 #if defined(__arm64__)
 unsigned __NSARM64DoubleHFACount(const char *type);
+BOOL __NSARM64PassedByReference(const char *type, NSUInteger size);
 #endif
 
 #if defined(__i386__)

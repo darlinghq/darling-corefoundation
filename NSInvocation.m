@@ -32,6 +32,50 @@
 #endif
 }
 
+#if defined(__arm64__)
+// On arm64 a struct passed by reference has its frame slot hold a pointer to a copy. The
+// invocation keeps those copies in one block after the frame, so that the struct can be
+// read and written by value like any other argument. The callee is handed the copy itself, so
+// a callee that modifies its parameter changes the stored argument, as it does on macOS.
+static BOOL isByReference(NSMethodSignature *signature, NSUInteger idx)
+{
+    NSMethodType *info = [signature _argInfo:idx];
+    return __NSARM64PassedByReference(info->type, info->size);
+}
+
+// Offset of argument idx's copy within the block (the block's length when idx is past the end).
+static NSUInteger referenceCopyOffset(NSMethodSignature *signature, NSUInteger idx)
+{
+    NSUInteger offset = 0;
+    for (NSUInteger i = 1; i < idx; i++)
+    {
+        if (isByReference(signature, i))
+        {
+            offset += (([signature _argInfo:i]->size + 15) & ~(NSUInteger)15);
+        }
+    }
+    return offset;
+}
+
+static NSUInteger referenceCopiesLength(NSMethodSignature *signature)
+{
+    return referenceCopyOffset(signature, [signature numberOfArguments] + 1);
+}
+
+// Points every by-reference slot of frame at its copy within copies.
+static void bindReferenceCopies(NSMethodSignature *signature, void *frame, void *copies)
+{
+    for (NSUInteger i = 1; i <= [signature numberOfArguments]; i++)
+    {
+        if (isByReference(signature, i))
+        {
+            void *copy = (unsigned char *)copies + referenceCopyOffset(signature, i);
+            *(void **)((unsigned char *)frame + [signature _argInfo:i]->offset) = copy;
+        }
+    }
+}
+#endif
+
 - (void **)_idxToArg:(NSUInteger)idx
 {
     if (idx == 0)
@@ -39,6 +83,12 @@
         return _retdata;
     }
 
+#if defined(__arm64__)
+    if (isByReference(_signature, idx))
+    {
+        return (void **)((unsigned char *)_frame + [_signature frameLength] + referenceCopyOffset(_signature, idx));
+    }
+#endif
     NSMethodType *argType = [_signature _argInfo:idx];
     // On x86_64 an argument split across register files is reached through
     // __NSSysVLoadArgument and __NSSysVStoreArgument; this is where its first part lives.
@@ -103,12 +153,34 @@
         NSUInteger retSize = 0;
         NSGetSizeAndAlignment([_signature methodReturnType], &retSize, NULL);
         retSize = MAX(retSize, RET_SIZE_ARGS);
-        _retdata = calloc(retSize + [_signature frameLength], 1);
+        NSUInteger copiesLength = 0;
+#if defined(__arm64__)
+        copiesLength = referenceCopiesLength(_signature);
+#endif
+        _retdata = calloc(retSize + [_signature frameLength] + copiesLength, 1);
         _frame = _retdata + retSize;
 
         if (frame) {
             memcpy(_frame, frame, [_signature frameLength]);
         }
+
+#if defined(__arm64__)
+        // Take our own copy of each struct the caller passed by reference.
+        void *copies = (unsigned char *)_frame + [_signature frameLength];
+        for (NSUInteger i = 1; i <= [_signature numberOfArguments]; i++)
+        {
+            if (isByReference(_signature, i))
+            {
+                void *source = frame ? *(void **)((unsigned char *)frame + [_signature _argInfo:i]->offset) : NULL;
+                void *copy = (unsigned char *)copies + referenceCopyOffset(_signature, i);
+                if (source != NULL)
+                {
+                    memcpy(copy, source, [_signature _argInfo:i]->size);
+                }
+            }
+        }
+        bindReferenceCopies(_signature, _frame, copies);
+#endif
 
 #if !defined(__arm64__)
         // On arm64 the indirect result location travels in x8, outside the frame.
