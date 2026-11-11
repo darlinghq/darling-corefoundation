@@ -5,10 +5,14 @@
 //  Copyright (c) 2014 Apportable. All rights reserved.
 //
 
+#import <objc/runtime.h>
 #import <Foundation/NSLocale.h>
 
 #import <Foundation/NSArray.h>
 #import <Foundation/NSDictionary.h>
+#import <Foundation/NSCoder.h>
+#import <Foundation/NSException.h>
+#import <Foundation/NSString.h>
 #import "NSObjectInternal.h"
 #import "ForFoundationOnly.h"
 
@@ -163,7 +167,7 @@ NSString *const NSLocaleLanguageConfidenceMedium = @"NSLocaleLanguageConfidenceM
 
 + (BOOL)supportsSecureCoding
 {
-    return NO;
+    return YES;
 }
 
 + (id)allocWithZone:(NSZone *)zone
@@ -212,13 +216,28 @@ NSString *const NSLocaleLanguageConfidenceMedium = @"NSLocaleLanguageConfidenceM
 
 - (void)encodeWithCoder:(NSCoder *)coder
 {
-    return;
+    if (![coder allowsKeyedCoding])
+    {
+        [NSException raise:NSInvalidArgumentException format:@"NSLocale does not support non keyed coders"];
+        return;
+    }
+    [coder encodeObject:[self localeIdentifier] forKey:@"NS.identifier"];
 }
 
+// self is the shared placeholder from +allocWithZone:, which must not be released.
 - (id)initWithCoder:(NSCoder *)aDecoder
 {
-    [self release];
-    return nil;
+    if (![aDecoder allowsKeyedCoding])
+    {
+        [NSException raise:NSInvalidArgumentException format:@"NSLocale does not support non keyed coders"];
+        return nil;
+    }
+    NSString *identifier = [aDecoder decodeObjectOfClass:objc_lookUpClass("NSString") forKey:@"NS.identifier"];
+    if (identifier == nil)
+    {
+        return nil;
+    }
+    return [self initWithLocaleIdentifier:identifier];
 }
 
 - (id)copyWithZone:(NSZone *)zone
