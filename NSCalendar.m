@@ -17,22 +17,23 @@ extern CFDateRef CFCalendarCopyGregorianStartDate(CFCalendarRef calendar);
 extern Boolean _CFCalendarDecomposeAbsoluteTimeV(CFCalendarRef calendar, CFAbsoluteTime at, const char *componentDesc, int **componentVector, int count);
 extern Boolean _CFCalendarGetComponentDifferenceV(CFCalendarRef calendar, CFAbsoluteTime startingAT, CFAbsoluteTime resultAT, CFOptionFlags options, const char *componentDesc, int **vector, int count);
 
-const NSCalendarIdentifier NSCalendarIdentifierGregorian = @"NSCalendarIdentifierGregorian";
-const NSCalendarIdentifier NSCalendarIdentifierISO8601 = @"NSCalendarIdentifierISO8601";
-const NSCalendarIdentifier NSCalendarIdentifierBuddhist = @"NSCalendarIdentifierBuddhist";
-const NSCalendarIdentifier NSCalendarIdentifierChinese = @"NSCalendarIdentifierChinese";
-const NSCalendarIdentifier NSCalendarIdentifierCoptic = @"NSCalendarIdentifierCoptic";
-const NSCalendarIdentifier NSCalendarIdentifierEthiopicAmeteAlem = @"NSCalendarIdentifierEthiopicAmeteAlem";
-const NSCalendarIdentifier NSCalendarIdentifierEthiopicAmeteMihret = @"NSCalendarIdentifierEthiopicAmeteMihret";
-const NSCalendarIdentifier NSCalendarIdentifierHebrew = @"NSCalendarIdentifierHebrew";
-const NSCalendarIdentifier NSCalendarIdentifierIndian = @"NSCalendarIdentifierIndian";
-const NSCalendarIdentifier NSCalendarIdentifierIslamic = @"NSCalendarIdentifierIslamic";
-const NSCalendarIdentifier NSCalendarIdentifierIslamicCivil = @"NSCalendarIdentifierIslamicCivil";
-const NSCalendarIdentifier NSCalendarIdentifierIslamicTabular = @"NSCalendarIdentifierIslamicTabular";
-const NSCalendarIdentifier NSCalendarIdentifierIslamicUmmAlQura = @"NSCalendarIdentifierIslamicUmmAlQura";
-const NSCalendarIdentifier NSCalendarIdentifierJapanese = @"NSCalendarIdentifierJapanese";
-const NSCalendarIdentifier NSCalendarIdentifierPersian = @"NSCalendarIdentifierPersian";
-const NSCalendarIdentifier NSCalendarIdentifierRepublicOfChina = @"NSCalendarIdentifierRepublicOfChina";
+// Values equal the toll-free kCFCalendarIdentifier* strings that CFCalendarCreateWithIdentifier accepts.
+const NSCalendarIdentifier NSCalendarIdentifierGregorian = @"gregorian";
+const NSCalendarIdentifier NSCalendarIdentifierISO8601 = @"iso8601";
+const NSCalendarIdentifier NSCalendarIdentifierBuddhist = @"buddhist";
+const NSCalendarIdentifier NSCalendarIdentifierChinese = @"chinese";
+const NSCalendarIdentifier NSCalendarIdentifierCoptic = @"coptic";
+const NSCalendarIdentifier NSCalendarIdentifierEthiopicAmeteAlem = @"ethiopic-amete-alem";
+const NSCalendarIdentifier NSCalendarIdentifierEthiopicAmeteMihret = @"ethiopic";
+const NSCalendarIdentifier NSCalendarIdentifierHebrew = @"hebrew";
+const NSCalendarIdentifier NSCalendarIdentifierIndian = @"indian";
+const NSCalendarIdentifier NSCalendarIdentifierIslamic = @"islamic";
+const NSCalendarIdentifier NSCalendarIdentifierIslamicCivil = @"islamic-civil";
+const NSCalendarIdentifier NSCalendarIdentifierIslamicTabular = @"islamic-tbla";
+const NSCalendarIdentifier NSCalendarIdentifierIslamicUmmAlQura = @"islamic-umalqura";
+const NSCalendarIdentifier NSCalendarIdentifierJapanese = @"japanese";
+const NSCalendarIdentifier NSCalendarIdentifierPersian = @"persian";
+const NSCalendarIdentifier NSCalendarIdentifierRepublicOfChina = @"roc";
 
 
 @implementation NSCalendar
@@ -99,67 +100,67 @@ static int makeCFCalendarComponentVector(NSDateComponents *comps, int *component
     NSInteger weekdayOrdinal = [comps weekdayOrdinal];
 
     int count = 0;
-    if (era != INT_MAX)
+    if (era != NSUndefinedDateComponent)
     {
         componentVector[count] = era;
         format[count++] = 'G';
     }
-    if (year != INT_MAX)
+    if (year != NSUndefinedDateComponent)
     {
         componentVector[count] = year;
         format[count++] = 'y';
     }
-    if (month != INT_MAX)
+    if (month != NSUndefinedDateComponent)
     {
         componentVector[count] = month;
         format[count++] = 'M';
     }
-    if (day != INT_MAX)
+    if (day != NSUndefinedDateComponent)
     {
         componentVector[count] = day;
         format[count++] = 'd';
     }
-    if (hour != INT_MAX)
+    if (hour != NSUndefinedDateComponent)
     {
         componentVector[count] = hour;
         format[count++] = 'H';
     }
-    if (minute != INT_MAX)
+    if (minute != NSUndefinedDateComponent)
     {
         componentVector[count] = minute;
         format[count++] = 'm';
     }
-    if (second != INT_MAX)
+    if (second != NSUndefinedDateComponent)
     {
         componentVector[count] = second;
         format[count++] = 's';
     }
-    if (nanosecond != INT_MAX)
+    if (nanosecond != NSUndefinedDateComponent)
     {
         componentVector[count] = nanosecond / NSEC_PER_MSEC;
         format[count++] = 'S';
     }
-    if (weekOfYear != INT_MAX)
+    if (weekOfYear != NSUndefinedDateComponent)
     {
         componentVector[count] = weekOfYear;
         format[count++] = 'w';
     }
-    if (weekOfMonth != INT_MAX)
+    if (weekOfMonth != NSUndefinedDateComponent)
     {
         componentVector[count] = weekOfMonth;
         format[count++] = 'W';
     }
-    if (yearForWeekOfYear != INT_MAX)
+    if (yearForWeekOfYear != NSUndefinedDateComponent)
     {
         componentVector[count] = yearForWeekOfYear;
         format[count++] = 'Y';
     }
-    if (weekday != INT_MAX)
+    if (weekday != NSUndefinedDateComponent)
     {
         componentVector[count] = weekday;
         format[count++] = 'E';
     }
-    if (weekdayOrdinal != INT_MAX)
+    if (weekdayOrdinal != NSUndefinedDateComponent)
     {
         componentVector[count] = weekdayOrdinal;
         format[count++] = 'F';
@@ -210,6 +211,20 @@ static int makeCFCalendarComponentsVector(NSUInteger unitFlags, int *componentVe
     {
         format[count++] = 'M';
     }
+    // Differences are taken in format order, so week units must precede
+    // day or the day count absorbs them. Keep in sync with componentsFromVector.
+    if ((unitFlags & NSCalendarUnitYearForWeekOfYear) != 0)
+    {
+        format[count++] = 'Y';
+    }
+    if ((unitFlags & NSCalendarUnitWeekOfYear) != 0)
+    {
+        format[count++] = 'w';
+    }
+    if ((unitFlags & NSCalendarUnitWeekOfMonth) != 0)
+    {
+        format[count++] = 'W';
+    }
     if ((unitFlags & NSCalendarUnitDay) != 0)
     {
         format[count++] = 'd';
@@ -229,18 +244,6 @@ static int makeCFCalendarComponentsVector(NSUInteger unitFlags, int *componentVe
     if ((unitFlags & NSCalendarUnitNanosecond) != 0)
     {
         format[count++] = 'S';
-    }
-    if ((unitFlags & NSCalendarUnitWeekOfYear) != 0)
-    {
-        format[count++] = 'w';
-    }
-    if ((unitFlags & NSCalendarUnitWeekOfMonth) != 0)
-    {
-        format[count++] = 'W';
-    }
-    if ((unitFlags & NSCalendarUnitYearForWeekOfYear) != 0)
-    {
-        format[count++] = 'Y';
     }
     if ((unitFlags & NSCalendarUnitWeekday) != 0)
     {
@@ -282,6 +285,18 @@ static NSDateComponents *componentsFromVector(NSCalendar *self, NSUInteger unitF
         {
             [comps setMonth:month];
         }
+    }
+    if ((unitFlags & NSCalendarUnitYearForWeekOfYear) != 0)
+    {
+        [comps setYearForWeekOfYear:componentVector[count++]];
+    }
+    if ((unitFlags & NSCalendarUnitWeekOfYear) != 0)
+    {
+        [comps setWeekOfYear:componentVector[count++]];
+    }
+    if ((unitFlags & NSCalendarUnitWeekOfMonth) != 0)
+    {
+        [comps setWeekOfMonth:componentVector[count++]];
     }
     if ((unitFlags & NSCalendarUnitDay) != 0)
     {
@@ -352,18 +367,6 @@ US Locale Fiscal Quarters:
     if ((unitFlags & NSCalendarUnitNanosecond) != 0)
     {
         [comps setNanosecond:NSEC_PER_MSEC * componentVector[count++]];
-    }
-    if ((unitFlags & NSCalendarUnitWeekOfYear) != 0)
-    {
-        [comps setWeekOfYear:componentVector[count++]];
-    }
-    if ((unitFlags & NSCalendarUnitWeekOfMonth) != 0)
-    {
-        [comps setWeekOfMonth:componentVector[count++]];
-    }
-    if ((unitFlags & NSCalendarUnitYearForWeekOfYear) != 0)
-    {
-        [comps setYearForWeekOfYear:componentVector[count++]];
     }
     if ((unitFlags & NSCalendarUnitWeekday) != 0)
     {
@@ -527,7 +530,7 @@ US Locale Fiscal Quarters:
 
 - (void)setGregorianStartDate:(NSDate *)date
 {
-    CFCalendarSetGregorianStartDate((CFCalendarRef)self, (CFDateRef)self);
+    CFCalendarSetGregorianStartDate((CFCalendarRef)self, (CFDateRef)date);
 }
 
 - (void)setMinimumDaysInFirstWeek:(NSUInteger)mdw
@@ -582,8 +585,18 @@ US Locale Fiscal Quarters:
 
 - (id)copyWithZone:(NSZone *)zone
 {
-    // this seems incomplete
-    return (id)CFCalendarCreateWithIdentifier(kCFAllocatorDefault, CFCalendarGetIdentifier((CFCalendarRef)self));
+    CFCalendarRef original = (CFCalendarRef)self;
+    CFCalendarRef copy = CFCalendarCreateWithIdentifier(kCFAllocatorDefault, CFCalendarGetIdentifier(original));
+    CFLocaleRef locale = CFCalendarCopyLocale(original);
+    CFTimeZoneRef timeZone = CFCalendarCopyTimeZone(original);
+    CFCalendarSetLocale(copy, locale);
+    CFCalendarSetTimeZone(copy, timeZone);
+    CFRelease(locale);
+    CFRelease(timeZone);
+    // After the locale and time zone: changing either rebuilds the ICU calendar, which resets these two.
+    CFCalendarSetFirstWeekday(copy, CFCalendarGetFirstWeekday(original));
+    CFCalendarSetMinimumDaysInFirstWeek(copy, CFCalendarGetMinimumDaysInFirstWeek(original));
+    return (id)copy;
 }
 
 - (NSUInteger)retainCount
