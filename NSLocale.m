@@ -264,8 +264,9 @@ NSString *const NSLocaleLanguageConfidenceMedium = @"NSLocaleLanguageConfidenceM
 
 - (id)_prefs
 {
-    extern CFDictionaryRef __CFLocaleGetPrefs(CFLocaleRef locale);
-    return (id)__CFLocaleGetPrefs((CFLocaleRef)self);
+    // Must not dispatch: __CFLocaleGetPrefs would call -_prefs again.
+    extern CFDictionaryRef __CFLocaleGetPrefsNoDispatch(CFLocaleRef locale);
+    return (id)__CFLocaleGetPrefsNoDispatch((CFLocaleRef)self);
 }
 
 - (id)initWithLocaleIdentifier:(NSString *)identifier
