@@ -783,7 +783,7 @@ CFTypeID CFDateFormatterGetTypeID(void) {
     return __kCFDateFormatterTypeID;
 }
 
-CFDateFormatterRef CFDateFormatterCreate(CFAllocatorRef allocator, CFLocaleRef locale, CFDateFormatterStyle dateStyle, CFDateFormatterStyle timeStyle) {
+static CFDateFormatterRef __CFDateFormatterCreate(CFAllocatorRef allocator, CFLocaleRef locale, CFDateFormatterStyle dateStyle, CFDateFormatterStyle timeStyle, CFCalendarRef calendar) {
     struct __CFDateFormatter *memory;
     uint32_t size = sizeof(struct __CFDateFormatter) - sizeof(CFRuntimeBase);
     if (allocator == NULL) allocator = __CFGetDefaultAllocator();
@@ -803,7 +803,7 @@ CFDateFormatterRef CFDateFormatterCreate(CFAllocatorRef allocator, CFLocaleRef l
     memory->_property._DoesRelativeDateFormatting = NULL;
     memory->_property._HasCustomFormat = NULL;
     memory->_property._TimeZone = NULL;
-    memory->_property._Calendar = NULL;
+    memory->_property._Calendar = calendar ? (CFCalendarRef)CFRetain(calendar) : NULL;
     memory->_property._CalendarName = NULL;
     memory->_property._TwoDigitStartDate = NULL;
     memory->_property._DefaultDate = NULL;
@@ -895,6 +895,75 @@ CFDateFormatterRef CFDateFormatterCreate(CFAllocatorRef allocator, CFLocaleRef l
 	return NULL;
     }
     return (CFDateFormatterRef)memory;
+}
+
+CFDateFormatterRef CFDateFormatterCreate(CFAllocatorRef allocator, CFLocaleRef locale, CFDateFormatterStyle dateStyle, CFDateFormatterStyle timeStyle) {
+    return __CFDateFormatterCreate(allocator, locale, dateStyle, timeStyle, NULL);
+}
+
+// The ICU pattern for a set of ISO 8601 options, after __createISO8601FormatString in
+// swift-corelibs-foundation's CFDateFormatter.c (Apache License 2.0 with Runtime Library Exception).
+static CFStringRef __CFDateFormatterCreateISO8601Pattern(CFISO8601DateFormatOptions options) {
+    CFMutableStringRef pattern = CFStringCreateMutable(kCFAllocatorSystemDefault, 0);
+    Boolean dash = (options & kCFISO8601DateFormatWithDashSeparatorInDate) != 0;
+    Boolean weekOfYear = (options & kCFISO8601DateFormatWithWeekOfYear) != 0;
+    const char *dateTimeSeparator = (options & kCFISO8601DateFormatWithSpaceBetweenDateAndTime) ? " " : "'T'";
+    const char *time = (options & kCFISO8601DateFormatWithColonSeparatorInTime) ? "HH:mm:ss" : "HHmmss";
+    const char *fraction = (options & kCFISO8601DateFormatWithFractionalSeconds) ? ".SSS" : "";
+    const char *zone = (options & kCFISO8601DateFormatWithColonSeparatorInTimeZone) ? "XXXXX" : "XXXX";
+
+    if ((options & kCFISO8601DateFormatWithInternetDateTime) == kCFISO8601DateFormatWithInternetDateTime) {
+        CFStringAppendFormat(pattern, NULL, CFSTR("%s%s%s%s%s"), dash ? "yyyy-MM-dd" : "yyyyMMdd", dateTimeSeparator, time, fraction, zone);
+        return pattern;
+    }
+    if (options & kCFISO8601DateFormatWithYear) {
+        CFStringAppendCString(pattern, weekOfYear ? "YYYY" : "yyyy", kCFStringEncodingASCII);
+    }
+    if (options & kCFISO8601DateFormatWithMonth) {
+        if (dash && CFStringGetLength(pattern) > 0) CFStringAppendCString(pattern, "-", kCFStringEncodingASCII);
+        CFStringAppendCString(pattern, "MM", kCFStringEncodingASCII);
+    }
+    if (weekOfYear) {
+        if (dash && CFStringGetLength(pattern) > 0) CFStringAppendCString(pattern, "-", kCFStringEncodingASCII);
+        CFStringAppendCString(pattern, "'W'ww", kCFStringEncodingASCII);
+    }
+    if (options & kCFISO8601DateFormatWithDay) {
+        if (dash && CFStringGetLength(pattern) > 0) CFStringAppendCString(pattern, "-", kCFStringEncodingASCII);
+        // Day of the ISO week, of the month, or of the year.
+        const char *day = weekOfYear ? "ee" : ((options & kCFISO8601DateFormatWithMonth) ? "dd" : "DDD");
+        CFStringAppendCString(pattern, day, kCFStringEncodingASCII);
+    }
+    if (options & kCFISO8601DateFormatWithTime) {
+        if (CFStringGetLength(pattern) > 0) CFStringAppendCString(pattern, dateTimeSeparator, kCFStringEncodingASCII);
+        CFStringAppendCString(pattern, time, kCFStringEncodingASCII);
+        CFStringAppendCString(pattern, fraction, kCFStringEncodingASCII);
+    }
+    if (options & kCFISO8601DateFormatWithTimeZone) {
+        CFStringAppendCString(pattern, zone, kCFStringEncodingASCII);
+    }
+    return pattern;
+}
+
+CFDateFormatterRef CFDateFormatterCreateISO8601Formatter(CFAllocatorRef allocator, CFISO8601DateFormatOptions formatOptions) {
+    // ISO 8601 weeks start on Monday, and week 1 is the first week with at least four days.
+    // kCFDateFormatterCalendarKey only takes a calendar's identifier, so pass the calendar at creation.
+    CFCalendarRef calendar = CFCalendarCreateWithIdentifier(kCFAllocatorSystemDefault, kCFCalendarIdentifierGregorian);
+    CFCalendarSetFirstWeekday(calendar, 2);
+    CFCalendarSetMinimumDaysInFirstWeek(calendar, 4);
+    CFLocaleRef locale = CFLocaleCreate(kCFAllocatorSystemDefault, CFSTR("en_US_POSIX"));
+    CFDateFormatterRef formatter = __CFDateFormatterCreate(allocator, locale, kCFDateFormatterNoStyle, kCFDateFormatterNoStyle, calendar);
+    CFRelease(locale);
+    CFRelease(calendar);
+    if (formatter == NULL) {
+        return NULL;
+    }
+
+    if (formatOptions != 0) {
+        CFStringRef pattern = __CFDateFormatterCreateISO8601Pattern(formatOptions);
+        CFDateFormatterSetFormat(formatter, pattern);
+        CFRelease(pattern);
+    }
+    return formatter;
 }
 
 static void __substituteFormatStringFromPrefsDFRelative(CFDateFormatterRef formatter) {

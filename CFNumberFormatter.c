@@ -149,11 +149,18 @@ CFNumberFormatterRef CFNumberFormatterCreate(CFAllocatorRef allocator, CFLocaleR
 	CFRelease(memory);
 	return NULL;
     }
-    UChar ubuff[4];
+    UChar ubuff[16];
     if (kCFNumberFormatterNoStyle == style) {
         status = U_ZERO_ERROR;
-	ubuff[0] = '#'; ubuff[1] = ';'; ubuff[2] = '#';
-        __cficu_unum_applyPattern(memory->_nf, false, ubuff, 3, NULL, &status);
+        // "No style" keeps the sign but shows no fraction digits (the value is rounded to an integer,
+        // half to even) and uses no grouping. The pattern used to be "#;#", whose negative subpattern
+        // has no minus sign, so negative numbers lost their sign.
+        // Observed on macOS 27 with NSNumberFormatterNoStyle (tier 2, black-box probe
+        // vd-upstream/mac-probes/v183-nostyle.m): -2.25 -> "-2", 0.5 -> "0", 2.5 -> "2", 3.5 -> "4",
+        // 1234567.8912 -> "1234568", -0.4 -> "-0".
+        // Test: tests/number-formatter-nostyle.m
+        ubuff[0] = '#'; ubuff[1] = ';'; ubuff[2] = '-'; ubuff[3] = '#';
+        __cficu_unum_applyPattern(memory->_nf, false, ubuff, 4, NULL, &status);
 	__cficu_unum_setAttribute(memory->_nf, UNUM_MAX_INTEGER_DIGITS, 42);
 	__cficu_unum_setAttribute(memory->_nf, UNUM_MAX_FRACTION_DIGITS, 0);
     }
