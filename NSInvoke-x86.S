@@ -5,10 +5,11 @@
 ___invoke__:
 
 # void __invoke__(void (*msgSend)(...),
-#                 void *retdata,
+#                 void *retdata, // i386: the result; x86_64: rax, rdx, xmm0 and xmm1 (8 bytes
+#                                //   each), or st(0) as a long double, see NSInvocationInternal.h
 #                 marg_list args,
 #                 size_t frame_length,
-#                 const char *return_type)
+#                 char return_type)
 
 #ifdef __i386__
 
@@ -40,16 +41,12 @@ Lpush:
   mov 4+8(%ebp), %esi #$esi = retdata
 
   mov %eax, (%esi) # copy the result (probably) into *retdata
+  mov %edx, 4(%esi) # the upper half of a 64-bit integer or an 8-byte struct
   
   #next, check to see if we need to put something else (ie something from
-  #the x87 registers or a 64-bit value) into *retdata instead. 
+  #the x87 registers) into *retdata instead. 
 
-  mov 8+16(%ebp), %eax #$eax == return_type
-  mov (%eax), %al
-  cmpb $0x71, %al # if (returnType[0] == 'q') // int64_t
-  je Lsixtyfourret
-  cmpb $0x51, %al # if (returnType[0] == 'Q') // uint64_t
-  je Lsixtyfourret
+  mov 8+16(%ebp), %eax #the return type character (passed by value, not through a pointer)
   cmpb $0x44, %al # if (returnType[0] == 'D') // long double
   je Llongdoubleret
   cmpb $0x64, %al # if (returnType[0] == 'd') // double
@@ -61,10 +58,6 @@ Lpush:
   # s for float, l for double, t for long double - just go with it)
   # in the location given (in this case *$esi)
   jmp Ldone #then jump to to cleanup and return
-Lsixtyfourret:
-  # just store edx too
-  mov %edx, 4(%esi)
-  jmp Ldone
 Ldoubleret:
   fstpl (%esi)
   jmp Ldone
@@ -110,8 +103,8 @@ Ldone:
   cld
   rep movsq
 
-  # Copy args into registers
-  movq 0xb0(%rsp), %rax
+  # Copy args into registers; %al bounds the number of vector registers a variadic callee saves
+  movl $8, %eax
   movapd 0xa0(%rsp), %xmm7
   movapd 0x90(%rsp), %xmm6
   movapd 0x80(%rsp), %xmm5
@@ -132,16 +125,16 @@ Ldone:
   movq -8(%rbp), %r10 # call objc_msgSend
   callq *%r10
 
-  movq -16(%rbp), %rsi # return value
+  movq -16(%rbp), %rsi # the 64-byte result register area
   movq -24(%rbp), %rcx
   cmpb $0x44, %cl # if (returnType[0] == 'D') // long double
   je Llongdoubleret
 
-  # double
-  movapd %xmm1, 32(%rsi)
-  movapd %xmm0, 16(%rsi)
+  # the low halves of xmm0 and xmm1 (floats and doubles)
+  movq %xmm1, 24(%rsi)
+  movq %xmm0, 16(%rsi)
 
-  # int128
+  # the integer result registers
   movq %rdx, 8(%rsi)
   movq %rax, (%rsi)
 

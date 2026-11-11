@@ -49,11 +49,21 @@ struct objc_sendv_margs {
     uintptr_t stackArgs[];
 };
 
-// indirectResult is the caller's x8 on arm64 (unused elsewhere).
+// indirectResult is the caller's x8 on arm64 and, on x86_64 and i386, the hidden result pointer when
+// entered through the stret handler (NULL otherwise).
+// returnStorage receives the result in the form the trampoline returns it: on x86_64 the registers
+// described by SYSV_RETURN_REGS_SIZE, on i386 eax and edx followed by room for an x87 value and a
+// flag word (see CFForwardingPrep.S), unless the result is written through a hidden pointer.
 id ___forwarding___(struct objc_sendv_margs *args, void *returnStorage, void *indirectResult)
 {
-    id self = (id)args->a[0];
-    SEL _cmd = (SEL)args->a[1];
+#if defined(__x86_64__) || defined(__i386__)
+    // The hidden result pointer comes first in the frame, ahead of self and _cmd.
+    unsigned selfIndex = indirectResult != NULL ? 1 : 0;
+#else
+    unsigned selfIndex = 0;
+#endif
+    id self = (id)args->a[selfIndex];
+    SEL _cmd = (SEL)args->a[selfIndex + 1];
     Class class = object_getClass(self);
 
     const char *className = class_getName(class);
@@ -129,7 +139,29 @@ id ___forwarding___(struct objc_sendv_margs *args, void *returnStorage, void *in
 
     for (NSUInteger i = 0; i < MIN(signatureVerification, signatureArgumentCount); i++)
     {
-        void *arg = ((const unsigned char *) args->a) + [signature _argInfo: i + 1]->offset;
+        NSMethodType *argInfo = [signature _argInfo: i + 1];
+#if defined(__x86_64__)
+        unsigned char split[16];
+        void *arg;
+        if ((argInfo->offset >> 32) != 0)
+        {
+            __NSSysVLoadArgument(args->a, argInfo->offset, argInfo->size, split);
+            arg = split;
+        }
+        else
+        {
+            arg = ((unsigned char *) args->a) + argInfo->offset;
+        }
+#else
+        void *arg = ((const unsigned char *) args->a) + argInfo->offset;
+#if defined(__arm64__)
+        // A struct passed by reference: the frame slot holds the address of the caller's copy.
+        if (__NSARM64PassedByReference(argInfo->type, argInfo->size))
+        {
+            arg = *(void **) arg;
+        }
+#endif
+#endif
         [inv setArgument: arg atIndex: i];
     }
 
@@ -142,7 +174,38 @@ id ___forwarding___(struct objc_sendv_margs *args, void *returnStorage, void *in
     else
     {
         [inv getReturnValue:returnStorage];
-        __NSARM64ExtendToInt(returnStorage, returnType);
+        __NSExtendNarrowInteger(returnStorage, returnType);
+    }
+#elif defined(__x86_64__)
+    if ([signature _stret])
+    {
+        [inv getReturnValue:indirectResult];
+    }
+    else
+    {
+        unsigned char value[16] = { 0 };
+        [inv getReturnValue:value];
+        __NSSysVReturnToRegisters(value, returnType, MIN([signature methodReturnLength], sizeof(value)), returnStorage);
+        __NSExtendNarrowInteger(returnStorage, returnType);
+    }
+#elif defined(__i386__)
+    if ([signature _stret])
+    {
+        [inv getReturnValue:returnStorage];
+    }
+    else
+    {
+        // Results of at most 8 bytes are loaded into eax:edx; floating-point results are
+        // flagged for the trampoline to load into st(0).
+        unsigned char *storage = returnStorage;
+        [inv getReturnValue:storage];
+        __NSExtendNarrowInteger(storage, returnType);
+        switch (__NSI386X87ResultType(returnType))
+        {
+            case _C_FLT: *(uint32_t *)(storage + 32) = 1; break;
+            case _C_DBL: *(uint32_t *)(storage + 32) = 2; break;
+            case _C_LNG_DBL: *(uint32_t *)(storage + 32) = 3; break;
+        }
     }
 #else
     [inv getReturnValue:returnStorage];

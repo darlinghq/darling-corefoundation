@@ -32,6 +32,50 @@
 #endif
 }
 
+#if defined(__arm64__)
+// On arm64 a struct passed by reference has its frame slot hold a pointer to a copy. The
+// invocation keeps those copies in one block after the frame, so that the struct can be
+// read and written by value like any other argument. The callee is handed the copy itself, so
+// a callee that modifies its parameter changes the stored argument, as it does on macOS.
+static BOOL isByReference(NSMethodSignature *signature, NSUInteger idx)
+{
+    NSMethodType *info = [signature _argInfo:idx];
+    return __NSARM64PassedByReference(info->type, info->size);
+}
+
+// Offset of argument idx's copy within the block (the block's length when idx is past the end).
+static NSUInteger referenceCopyOffset(NSMethodSignature *signature, NSUInteger idx)
+{
+    NSUInteger offset = 0;
+    for (NSUInteger i = 1; i < idx; i++)
+    {
+        if (isByReference(signature, i))
+        {
+            offset += (([signature _argInfo:i]->size + 15) & ~(NSUInteger)15);
+        }
+    }
+    return offset;
+}
+
+static NSUInteger referenceCopiesLength(NSMethodSignature *signature)
+{
+    return referenceCopyOffset(signature, [signature numberOfArguments] + 1);
+}
+
+// Points every by-reference slot of frame at its copy within copies.
+static void bindReferenceCopies(NSMethodSignature *signature, void *frame, void *copies)
+{
+    for (NSUInteger i = 1; i <= [signature numberOfArguments]; i++)
+    {
+        if (isByReference(signature, i))
+        {
+            void *copy = (unsigned char *)copies + referenceCopyOffset(signature, i);
+            *(void **)((unsigned char *)frame + [signature _argInfo:i]->offset) = copy;
+        }
+    }
+}
+#endif
+
 - (void **)_idxToArg:(NSUInteger)idx
 {
     if (idx == 0)
@@ -39,8 +83,16 @@
         return _retdata;
     }
 
+#if defined(__arm64__)
+    if (isByReference(_signature, idx))
+    {
+        return (void **)((unsigned char *)_frame + [_signature frameLength] + referenceCopyOffset(_signature, idx));
+    }
+#endif
     NSMethodType *argType = [_signature _argInfo:idx];
-    return _frame + argType->offset;
+    // On x86_64 an argument split across register files is reached through
+    // __NSSysVLoadArgument and __NSSysVStoreArgument; this is where its first part lives.
+    return _frame + (argType->offset & 0xffffffffu);
 }
 
 // NSInvocation can retain its arguments, including copies of C
@@ -101,12 +153,34 @@
         NSUInteger retSize = 0;
         NSGetSizeAndAlignment([_signature methodReturnType], &retSize, NULL);
         retSize = MAX(retSize, RET_SIZE_ARGS);
-        _retdata = calloc(retSize + [_signature frameLength], 1);
+        NSUInteger copiesLength = 0;
+#if defined(__arm64__)
+        copiesLength = referenceCopiesLength(_signature);
+#endif
+        _retdata = calloc(retSize + [_signature frameLength] + copiesLength, 1);
         _frame = _retdata + retSize;
 
         if (frame) {
             memcpy(_frame, frame, [_signature frameLength]);
         }
+
+#if defined(__arm64__)
+        // Take our own copy of each struct the caller passed by reference.
+        void *copies = (unsigned char *)_frame + [_signature frameLength];
+        for (NSUInteger i = 1; i <= [_signature numberOfArguments]; i++)
+        {
+            if (isByReference(_signature, i))
+            {
+                void *source = frame ? *(void **)((unsigned char *)frame + [_signature _argInfo:i]->offset) : NULL;
+                void *copy = (unsigned char *)copies + referenceCopyOffset(_signature, i);
+                if (source != NULL)
+                {
+                    memcpy(copy, source, [_signature _argInfo:i]->size);
+                }
+            }
+        }
+        bindReferenceCopies(_signature, _frame, copies);
+#endif
 
 #if !defined(__arm64__)
         // On arm64 the indirect result location travels in x8, outside the frame.
@@ -234,6 +308,13 @@
     NSMethodType *argInfo = [_signature _argInfo:idx];
     void **arg = [self _idxToArg:idx];
 
+#if defined(__x86_64__)
+    if (idx > 0)
+    {
+        __NSSysVLoadArgument(_frame, argInfo->offset, argInfo->size, argumentLocation);
+        return;
+    }
+#endif
     memcpy(argumentLocation, arg, argInfo->size);
 }
 
@@ -255,13 +336,26 @@
     NSMethodType *argInfo = [_signature _argInfo:idx];
     void **arg = [self _idxToArg:idx];
 
+#if defined(__x86_64__)
+    if (idx > 0)
+    {
+        __NSSysVStoreArgument(_frame, argInfo->offset, argInfo->size, argumentLocation);
+    }
+    else
+#endif
     memcpy(arg, argumentLocation, argInfo->size);
 
 #if defined(__arm64__)
     // Register slots (x0-x7 and d0-d7) are 8 bytes wide; stack slots of small types are packed.
     if (idx > 0 && argInfo->offset < 0x80)
     {
-        __NSARM64ExtendToInt(arg, argInfo->type);
+        __NSExtendNarrowInteger(arg, argInfo->type);
+    }
+#elif defined(__x86_64__) || defined(__i386__)
+    // Every argument occupies a whole word or more here, and callers widen narrow integers.
+    if (idx > 0)
+    {
+        __NSExtendNarrowInteger(arg, argInfo->type);
     }
 #endif
 
@@ -307,8 +401,27 @@ static BOOL isBlock(id object)
     // An indirect result is written by the callee through x8 (_retdata), so the trampoline stores nothing.
     char rettype = [_signature _stret] ? _C_VOID : returnType[0];
     __invoke__(imp, _retdata, frame, [_signature frameLength], rettype, __NSARM64DoubleHFACount(returnType));
+#elif defined(__x86_64__)
+    const char *returnType = stripQualifiersAndComments([_signature methodReturnType]);
+    uint64_t regs[SYSV_RETURN_REGS_SIZE / sizeof(uint64_t)] = { 0 };
+    // __invoke__ takes the result of a long double, or of a struct holding only one, from st(0).
+    char rettype = __NSSysVReturnsInX87(returnType) ? _C_LNG_DBL : returnType[0];
+    __invoke__(imp, regs, frame, [_signature frameLength], rettype, 0);
+
+    // A MEMORY-class result was written through the hidden pointer in the frame; any other
+    // result is rebuilt from the registers that carried it.
+    if (![_signature _stret] && returnType[0] != _C_VOID)
+    {
+        __NSSysVReturnFromRegisters(regs, returnType, [_signature methodReturnLength], _retdata);
+    }
 #else
-    char rettype = [_signature methodReturnType][0];
+    // __invoke__ takes the result of a float, double or long double, or of a struct holding
+    // only a float or double, from st(0).
+    char rettype = __NSI386X87ResultType([_signature methodReturnType]);
+    if (rettype == 0)
+    {
+        rettype = stripQualifiersAndComments([_signature methodReturnType])[0];
+    }
 
     if ([_signature _stret])
     {
@@ -342,7 +455,6 @@ static BOOL isBlock(id object)
     }
 
     IMP imp;
-
     if (isBlock([self target]))
     {
         struct Block_layout *block_layout = (struct Block_layout *) target;
@@ -352,6 +464,18 @@ static BOOL isBlock(id object)
         else if ([_signature _stret])
         {
             imp = (IMP)&objc_msgSend_stret;
+        }
+    #endif
+    #if defined(__x86_64__)
+        else if (__NSSysVReturnsInX87([_signature methodReturnType]))
+        {
+            // A message to nil must leave the x87 stack balanced for a long double result.
+            imp = (IMP)&objc_msgSend_fpret;
+        }
+    #elif defined(__i386__)
+        else if (__NSI386X87ResultType([_signature methodReturnType]) != 0)
+        {
+            imp = (IMP)&objc_msgSend_fpret;
         }
     #endif
     else
@@ -495,10 +619,12 @@ static BOOL isBlock(id object)
 
         default:
             {
-                const void *ptr = [self _idxToArg: index + 1];
-                CFDataRef data = CFDataCreateWithBytesNoCopy(NULL, ptr, argInfo->size, kCFAllocatorNull);
+                void *value = calloc(1, argInfo->size ?: 1);
+                [self getArgument: value atIndex: index];
+                CFDataRef data = CFDataCreateWithBytesNoCopy(NULL, value, argInfo->size, kCFAllocatorNull);
                 CFStringAppend(description, (CFStringRef) [data description]);
                 CFRelease(data);
+                free(value);
                 break;
             }
         }

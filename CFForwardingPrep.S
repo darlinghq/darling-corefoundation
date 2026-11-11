@@ -109,26 +109,60 @@ __CF_forwarding_prep_0:
     push %ebp
     mov %esp, %ebp          // create a stack frame
     
-    sub $0x10, %esp         // reserve space for args pointer, return value pointer, and return values
+    sub $0x50, %esp         // reserve space for the two arguments and 0x30 bytes of return storage
     and $-16, %esp          // align stack
     
     lea 8(%ebp), %eax       // load marg_list, skipping frame pointer and return address
     mov %eax, (%esp)        // pass marg_list as first argument
 
-    lea 8(%esp), %eax       // load pointer to return value space on stack
+    lea 0x10(%esp), %eax    // load pointer to return value space on stack
     mov %eax, 4(%esp)       // pass pointer as second argument
+    movl $0x0, 8(%esp)      // no stret pointer
 
-    movl $0x0, 8(%esp)      // clear out return value space
-    movl $0x0, 12(%esp)
+    // clear out return value space: eax:edx at 0x00, room for an x87 value, a flag word at 0x20
+    movl $0x0, 0x10(%esp)
+    movl $0x0, 0x14(%esp)
+    movl $0x0, 0x18(%esp)
+    movl $0x0, 0x1c(%esp)
+    movl $0x0, 0x20(%esp)
+    movl $0x0, 0x24(%esp)
+    movl $0x0, 0x28(%esp)
+    movl $0x0, 0x2c(%esp)
+    movl $0x0, 0x30(%esp)
 
     call ____forwarding___   // call through
-    mov 4(%esp), %edx       // temporarily save return storage pointer
 
+    cmp $0, %eax            // check for forwarding completion
+    jne LRestart            // forwarding target returned: restart the send
+
+    // Load the return value registers from return storage. Float, double and long double
+    // results are returned in st(0); the flag word says which one, if any.
+    mov 0x30(%esp), %ecx
+    cmp $1, %ecx
+    je LRetFloat
+    cmp $2, %ecx
+    je LRetDouble
+    cmp $3, %ecx
+    je LRetLongDouble
+    mov 0x10(%esp), %eax
+    mov 0x14(%esp), %edx
+    jmp LSuccess
+LRetFloat:
+    flds 0x10(%esp)
+    jmp LSuccess
+LRetDouble:
+    fldl 0x10(%esp)
+    jmp LSuccess
+LRetLongDouble:
+    fldt 0x10(%esp)
+LSuccess:
     mov %ebp, %esp          // restore stack
     pop %ebp                // pop stack frame
-    
-    cmp $0, %eax            // check for forwarding completion
-    je LSuccess             // return to caller if done
+    ret                     // return
+
+LRestart:
+    mov %ebp, %esp          // restore stack
+    pop %ebp                // pop stack frame
 
     // Overwriting the caller's stack frame like this is not great, but there's
     //  no easy place to save off the old value; the next-best solution would
@@ -142,10 +176,6 @@ __CF_forwarding_prep_0:
     //  onto the stack for subsequent message sends to the same target.
     mov %eax, 4(%esp)       // overwrite original "self" value
     jmp _objc_msgSend        // restart message send
-LSuccess:
-    mov (%edx), %eax        // load return value registers from return storage
-    mov 4(%edx), %edx
-    ret                     // return
     
 .text
 .global  __CF_forwarding_prep_1
@@ -155,14 +185,15 @@ __CF_forwarding_prep_1:
     push %ebp
     mov %esp, %ebp          // create a stack frame
 
-    sub $0x8, %esp          // reserve space for args pointer and return value
+    sub $0x10, %esp         // reserve space for the three arguments
     and $-16, %esp          // align stack
 
-    lea 12(%ebp), %eax      // load marg_list, skipping frame pointer, return address, and stret pointer
-    mov %eax, (%esp)        // pass marg_list as first argument
+    lea 8(%ebp), %eax       // load marg_list, skipping frame pointer and return address; the stret
+    mov %eax, (%esp)        // pointer is its first word, as NSMethodSignature lays the frame out
 
     mov 8(%ebp), %eax       // load stret pointer
-    mov %eax, 4(%esp)       // pass as second argument
+    mov %eax, 4(%esp)       // pass as second argument (the result storage)
+    mov %eax, 8(%esp)       // and as the third, which marks the stret entry
 
     call ____forwarding___   // call through
 
@@ -206,8 +237,47 @@ __CF_forwarding_prep_b:
 .globl __CF_forwarding_prep_1
 .align 4, 0x90
 
+// Frame while forwarding (rsp-relative):
+//   0x00  result registers for the caller: rax, rdx, xmm0, xmm1 (8 bytes each), then an x87 flag
+//   0x40  the argument block (see NSInvocationInternal.h): rdi..r9 at 0x40, xmm0-7 at 0x70, %al at 0xf0
+//   0x110 saved rbp, return address, then the caller's stack arguments, which therefore follow the
+//         argument block at 0xe0 as NSMethodSignature expects
+.macro SAVE_ARG_BLOCK
+    movq   %rax, 0xf0(%rsp)
+    movapd %xmm7, 0xe0(%rsp)
+    movapd %xmm6, 0xd0(%rsp)
+    movapd %xmm5, 0xc0(%rsp)
+    movapd %xmm4, 0xb0(%rsp)
+    movapd %xmm3, 0xa0(%rsp)
+    movapd %xmm2, 0x90(%rsp)
+    movapd %xmm1, 0x80(%rsp)
+    movapd %xmm0, 0x70(%rsp)
+    movq   %r9, 0x68(%rsp)
+    movq   %r8, 0x60(%rsp)
+    movq   %rcx, 0x58(%rsp)
+    movq   %rdx, 0x50(%rsp)
+    movq   %rsi, 0x48(%rsp)
+    movq   %rdi, 0x40(%rsp)
+.endm
+
+// Reloads everything but rdi and rsi from the argument block.
+.macro RESTORE_ARG_BLOCK
+    movq   0xf0(%rsp), %rax
+    movapd 0xe0(%rsp), %xmm7
+    movapd 0xd0(%rsp), %xmm6
+    movapd 0xc0(%rsp), %xmm5
+    movapd 0xb0(%rsp), %xmm4
+    movapd 0xa0(%rsp), %xmm3
+    movapd 0x90(%rsp), %xmm2
+    movapd 0x80(%rsp), %xmm1
+    movapd 0x70(%rsp), %xmm0
+    movq   0x68(%rsp), %r9
+    movq   0x60(%rsp), %r8
+    movq   0x58(%rsp), %rcx
+    movq   0x50(%rsp), %rdx
+.endm
+
 __CF_forwarding_prep_0:
-__CF_forwarding_prep_1:
     .cfi_startproc
     .cfi_personality 155, ___objc_personality_v0
     push %rbp
@@ -216,26 +286,13 @@ __CF_forwarding_prep_1:
     movq %rsp, %rbp
     .cfi_def_cfa_register rbp
 
-    // Copy args from regs into a stack var
-    subq   $0xd0, %rsp
-    movq   %rax, 0xb0(%rsp)
-    movapd %xmm7, 0xa0(%rsp)
-    movapd %xmm6, 0x90(%rsp)
-    movapd %xmm5, 0x80(%rsp)
-    movapd %xmm4, 0x70(%rsp)
-    movapd %xmm3, 0x60(%rsp)
-    movapd %xmm2, 0x50(%rsp)
-    movapd %xmm1, 0x40(%rsp)
-    movapd %xmm0, 0x30(%rsp)
-    movq   %r9, 0x28(%rsp)
-    movq   %r8, 0x20(%rsp)
-    movq   %rcx, 0x18(%rsp)
-    movq   %rdx, 0x10(%rsp)
-    movq   %rsi, 8(%rsp)
-    movq   %rdi, (%rsp)
+    subq   $0x110, %rsp
+    SAVE_ARG_BLOCK
 
-    movq   %rsp, %rdi
-    leaq   0xc0(%rsp), %rsi
+    // ____forwarding___(argument block, result registers, no hidden result pointer)
+    leaq   0x40(%rsp), %rdi
+    movq   %rsp, %rsi
+    xorl   %edx, %edx
     call   ____forwarding___ // call through
 
     cmpq   $0, %rax          // check for forwarding completion
@@ -246,10 +303,14 @@ __CF_forwarding_prep_1:
     // and jump back to our caller
 
     // here's how we get the return values (see NSInvoke-x86.S)
-    movq   0xc0(%rsp), %rax
-    movq   0xc8(%rsp), %rdx
-    movapd 0xd0(%rsp), %xmm0
-    movapd 0xe0(%rsp), %xmm1
+    movq   0x00(%rsp), %rax
+    movq   0x08(%rsp), %rdx
+    movsd  0x10(%rsp), %xmm0
+    movsd  0x18(%rsp), %xmm1
+    cmpq   $0, 0x20(%rsp)    // a long double result is returned in st(0)
+    je     Lnox87
+    fldt   0x00(%rsp)
+Lnox87:
 
     movq   %rbp, %rsp
     pop    %rbp
@@ -259,20 +320,8 @@ __CF_forwarding_prep_1:
 Lfail:
     // if we got a non-nil value, it's our forwarding target
     movq   %rax, %rdi
-    movq   0x80(%rsp), %rax
-    movapd 0xa0(%rsp), %xmm7
-    movapd 0x90(%rsp), %xmm6
-    movapd 0x80(%rsp), %xmm5
-    movapd 0x70(%rsp), %xmm4
-    movapd 0x60(%rsp), %xmm3
-    movapd 0x50(%rsp), %xmm2
-    movapd 0x40(%rsp), %xmm1
-    movapd 0x30(%rsp), %xmm0
-    movq   0x28(%rsp), %r9
-    movq   0x20(%rsp), %r8
-    movq   0x18(%rsp), %rcx
-    movq   0x10(%rsp), %rdx
-    movq   8(%rsp), %rsi
+    RESTORE_ARG_BLOCK
+    movq   0x48(%rsp), %rsi
     // movq   (%rsp), %rdi // self overwritten
 
     movq   %rbp, %rsp
@@ -280,6 +329,48 @@ Lfail:
     // .cfi_def_cfa rsp, 8
 
     jmp    _objc_msgSend // restart message send
+
+    .cfi_endproc
+
+// Entered for messages whose result is returned through a hidden pointer: rdi holds the
+// pointer, rsi the receiver and rdx the selector.
+__CF_forwarding_prep_1:
+    .cfi_startproc
+    .cfi_personality 155, ___objc_personality_v0
+    push %rbp
+    .cfi_def_cfa_offset 16
+    .cfi_offset %rbp, -16
+    movq %rsp, %rbp
+    .cfi_def_cfa_register rbp
+
+    subq   $0x110, %rsp
+    SAVE_ARG_BLOCK
+
+    leaq   0x40(%rsp), %rdi
+    movq   %rsp, %rsi
+    movq   0x40(%rsp), %rdx  // the hidden result pointer
+    call   ____forwarding___ // call through
+
+    cmpq   $0, %rax
+    jne    LfailStret
+
+    // the result is already in the caller's memory; the hidden pointer comes back in rax
+    movq   0x40(%rsp), %rax
+
+    movq   %rbp, %rsp
+    pop    %rbp
+    ret
+
+LfailStret:
+    // the forwarding target replaces the receiver in rsi
+    movq   %rax, %rsi
+    RESTORE_ARG_BLOCK
+    movq   0x40(%rsp), %rdi
+
+    movq   %rbp, %rsp
+    pop    %rbp
+
+    jmp    _objc_msgSend_stret // restart message send
 
     .cfi_endproc
 

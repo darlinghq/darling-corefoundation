@@ -5,7 +5,9 @@
 //  Copyright (c) 2014 Apportable. All rights reserved.
 //
 
+#import <Foundation/NSInvocation.h>
 #import <Foundation/NSMethodSignature.h>
+#import "NSInvocationInternal.h"
 #import "NSObjCRuntimeInternal.h"
 #import "NSObjectInternal.h"
 
@@ -18,55 +20,192 @@
 extern void __CFStringAppendBytes(CFMutableStringRef, const char *, CFIndex, CFStringEncoding);
 
 #if defined(__arm64__)
-// AAPCS64 passes and returns structs made of one to four doubles in d registers.
-// Float aggregates are not recognised.
+// Flattens the type at *pp into homogeneous floating-point members for the AAPCS64 rules:
+// structs add up their members, unions take the largest member, arrays repeat their element.
+// *base records the member kind ('f' or 'd'; long double is double on Apple arm64) and must
+// match throughout. Returns NO as soon as anything else appears.
+static BOOL __NSARM64Flatten(const char **pp, char *base, unsigned *count)
+{
+    const char *p = stripQualifiersAndComments(*pp);
+    switch (*p)
+    {
+        case _C_FLT:
+        case _C_DBL:
+        case _C_LNG_DBL:
+        {
+            char kind = *p == _C_FLT ? 'f' : 'd';
+            if (*base != 0 && *base != kind)
+            {
+                return NO;
+            }
+            *base = kind;
+            ++*count;
+            *pp = p + 1;
+            return *count <= 4;
+        }
+        case _C_ARY_B:
+        {
+            char *end = NULL;
+            unsigned long n = strtoul(p + 1, &end, 10);
+            const char *element = end;
+            unsigned before = *count;
+            if (n == 0 || !__NSARM64Flatten(&element, base, count) || *element != _C_ARY_E)
+            {
+                return NO;
+            }
+            unsigned perElement = *count - before;
+            if (perElement * n > 4)
+            {
+                return NO;
+            }
+            *count = before + perElement * (unsigned)n;
+            *pp = element + 1;
+            return YES;
+        }
+        case _C_STRUCT_B:
+        case _C_UNION_B:
+        {
+            BOOL isUnion = *p == _C_UNION_B;
+            char close = isUnion ? _C_UNION_E : _C_STRUCT_E;
+            const char *member = strchr(p, '=');
+            if (member == NULL)
+            {
+                return NO;
+            }
+            member++;
+            unsigned before = *count, widest = 0;
+            while (*member != close)
+            {
+                if (*member == '\0')
+                {
+                    return NO;
+                }
+                if (isUnion)
+                {
+                    *count = before;
+                }
+                if (!__NSARM64Flatten(&member, base, count))
+                {
+                    return NO;
+                }
+                if (isUnion && *count - before > widest)
+                {
+                    widest = *count - before;
+                }
+            }
+            if (isUnion)
+            {
+                *count = before + widest;
+            }
+            *pp = member + 1;
+            return *count > before;
+        }
+    }
+    return NO;
+}
+
+// AAPCS64 passes and returns homogeneous aggregates of one to four doubles in d registers.
+// Returns the member count, or 0 for any other type. Aggregates of floats are not recognised.
 unsigned __NSARM64DoubleHFACount(const char *type)
 {
     type = stripQualifiersAndComments(type);
-    if (*type != _C_STRUCT_B)
+    if (*type != _C_STRUCT_B && *type != _C_UNION_B)
     {
         return 0;
     }
-
-    unsigned count = 0, depth = 0;
-    for (const char *p = type; *p; p++)
+    char base = 0;
+    unsigned count = 0;
+    if (!__NSARM64Flatten(&type, &base, &count) || base != 'd')
     {
-        if (*p == _C_STRUCT_B)
-        {
-            p = strchr(p, '=');
-            if (p == NULL)
-            {
-                return 0;
-            }
-            depth++;
-        }
-        else if (*p == _C_STRUCT_E)
-        {
-            if (--depth == 0)
-            {
-                return count;
-            }
-        }
-        else if (*p == '"')
-        {
-            p = strchr(p + 1, '"');
-            if (p == NULL)
-            {
-                return 0;
-            }
-        }
-        else if (*p != _C_DBL || ++count > 4)
-        {
-            return 0;
-        }
+        return 0;
     }
-    return 0;
+    return count;
 }
 
-// Apple's arm64 ABI extends integer arguments and results narrower than int to 32 bits
-// (callers extend register arguments, callees extend results), and code compiled for it
-// relies on that. value holds a value of the given type in the low bytes of a 4+ byte slot.
-void __NSARM64ExtendToInt(void *value, const char *type)
+// A struct or union of more than 16 bytes that is not a homogeneous aggregate of doubles is
+// passed as a pointer to a copy made by the caller, not by value.
+BOOL __NSARM64PassedByReference(const char *type, NSUInteger size)
+{
+    type = stripQualifiersAndComments(type);
+    return (*type == _C_STRUCT_B || *type == _C_UNION_B) && size > 16 && __NSARM64DoubleHFACount(type) == 0;
+}
+
+// Places one argument of an arm64 call (the frame is described at initWithObjCTypes:) and
+// returns its offset in the frame. *usedGP and *usedFP count the x and d registers taken so
+// far; *frameLength is the end of the stack arguments so far.
+static size_t __NSARM64PlaceArgument(const char *type, NSUInteger size, NSUInteger alignment, unsigned short *usedGP, unsigned short *usedFP, NSUInteger *frameLength)
+{
+    const char *argType = stripQualifiersAndComments(type);
+    size_t offset = 0;
+    unsigned hfaCount = __NSARM64DoubleHFACount(argType);
+    BOOL isFP = argType[0] == _C_FLT || argType[0] == _C_DBL || argType[0] == 'D';
+    BOOL inRegisters = NO;
+    if (isFP || hfaCount)
+    {
+        unsigned short registersNeeded = isFP ? 1 : hfaCount;
+        if (*usedFP + registersNeeded <= 8)
+        {
+            offset = 0x40 + *usedFP * 8;
+            *usedFP += registersNeeded;
+            inRegisters = YES;
+        }
+        else
+        {
+            *usedFP = 8;
+        }
+    }
+    else if (__NSARM64PassedByReference(argType, size))
+    {
+        // The frame slot holds a pointer to a copy of the struct (see NSInvocation).
+        if (*usedGP < 8)
+        {
+            offset = *usedGP * 8;
+            (*usedGP)++;
+            inRegisters = YES;
+        }
+        else
+        {
+            *frameLength = ALIGN_TO(*frameLength, 8);
+            offset = *frameLength;
+            *frameLength += 8;
+            inRegisters = YES;
+        }
+    }
+    else if (size <= 16)
+    {
+        unsigned short registersNeeded = ALIGN_TO(size, 8) / 8;
+        if (*usedGP + registersNeeded <= 8)
+        {
+            offset = *usedGP * 8;
+            *usedGP += registersNeeded;
+            inRegisters = YES;
+        }
+        else
+        {
+            *usedGP = 8;
+        }
+    }
+    if (!inRegisters)
+    {
+        // Apple's arm64 ABI packs scalar stack arguments by their own size and alignment,
+        // but aggregates still take 8-byte-aligned slots rounded up to 8 bytes.
+        BOOL isAggregate = argType[0] == _C_STRUCT_B || argType[0] == _C_UNION_B || argType[0] == _C_ARY_B;
+        NSUInteger stackAlignment = isAggregate ? MAX(alignment, 8) : alignment;
+        NSUInteger stackSize = isAggregate ? ALIGN_TO(size, 8) : size;
+        *frameLength = ALIGN_TO(*frameLength, stackAlignment);
+        offset = *frameLength;
+        *frameLength += stackSize;
+    }
+
+    return offset;
+}
+#endif
+
+// The arm64, x86_64 and i386 ABIs as implemented by the compiler used for Apple platforms extend
+// integer arguments and results narrower than int to 32 bits (callers extend arguments, callees
+// extend results), and compiled code relies on that. value holds a value of the given type in the
+// low bytes of a 4+ byte slot.
+void __NSExtendNarrowInteger(void *value, const char *type)
 {
     switch (*stripQualifiersAndComments(type))
     {
@@ -96,6 +235,380 @@ void __NSARM64ExtendToInt(void *value, const char *type)
             break;
         }
     }
+}
+
+#if defined(__x86_64__)
+// System V AMD64 classification. Each eightbyte of an argument or result is INTEGER or SSE;
+// anything that needs memory (larger than 16 bytes, long double, too many members) is passed on
+// the stack or returned through a hidden pointer.
+enum { SysVNoClass = 0, SysVInteger, SysVSSE };
+
+typedef struct {
+    BOOL memory;
+    BOOL x87;               // a lone long double: passed in memory, returned in st(0)
+    unsigned eightbytes;
+    unsigned char classes[2];
+    unsigned longDoubles;
+    unsigned otherScalars;
+} SysVClassification;
+
+static void sysvMergeClass(SysVClassification *c, NSUInteger offset, unsigned char cls)
+{
+    c->otherScalars++;
+    if (offset / 8 >= 2)
+    {
+        c->memory = YES;
+        return;
+    }
+    unsigned char *slot = &c->classes[offset / 8];
+    *slot = (*slot == SysVInteger || cls == SysVInteger) ? SysVInteger : cls;
+}
+
+static const char *sysvClassifyMember(const char *type, NSUInteger offset, SysVClassification *c)
+{
+    type = stripQualifiersAndComments(type);
+    const char *next = type;
+    NSUInteger size = 0, alignment = 0;
+
+    switch (*type)
+    {
+        case _C_STRUCT_B:
+        case _C_UNION_B:
+        {
+            BOOL isUnion = *type == _C_UNION_B;
+            char end = isUnion ? _C_UNION_E : _C_STRUCT_E;
+            const char *p = type + 1;
+            while (*p != '\0' && *p != '=' && *p != end)
+            {
+                p++;
+            }
+            if (*p == '=')
+            {
+                p++;
+            }
+            NSUInteger memberOffset = 0;
+            while (*p != '\0' && *p != end)
+            {
+                NSUInteger memberSize = 0, memberAlignment = 0;
+                __NSGetSizeAndAlignment(p, &memberSize, &memberAlignment, NO);
+                if (memberAlignment == 0)
+                {
+                    memberAlignment = 1;
+                }
+                memberOffset = isUnion ? 0 : ALIGN_TO(memberOffset, memberAlignment);
+                p = sysvClassifyMember(p, offset + memberOffset, c);
+                if (!isUnion)
+                {
+                    memberOffset += memberSize;
+                }
+            }
+            return *p == end ? p + 1 : p;
+        }
+
+        case _C_ARY_B:
+        {
+            char *p;
+            long count = strtol(type + 1, &p, 10);
+            NSUInteger elementSize = 0, elementAlignment = 0;
+            __NSGetSizeAndAlignment(p, &elementSize, &elementAlignment, NO);
+            const char *after = p;
+            for (long i = 0; i < count; i++)
+            {
+                after = sysvClassifyMember(p, offset + i * elementSize, c);
+            }
+            if (count == 0)
+            {
+                after = __NSGetSizeAndAlignment(p, &elementSize, &elementAlignment, NO);
+            }
+            return *after == _C_ARY_E ? after + 1 : after;
+        }
+
+        case _C_FLT:
+        case _C_DBL:
+            sysvMergeClass(c, offset, SysVSSE);
+            break;
+
+        case _C_LNG_DBL:
+            c->longDoubles++;
+            break;
+
+        default:
+            sysvMergeClass(c, offset, SysVInteger);
+            break;
+    }
+
+    return __NSGetSizeAndAlignment(next, &size, &alignment, NO);
+}
+
+static SysVClassification sysvClassify(const char *type, NSUInteger size)
+{
+    SysVClassification c = { NO, NO, (unsigned)((size + 7) / 8), { SysVNoClass, SysVNoClass }, 0, 0 };
+    type = stripQualifiersAndComments(type);
+
+    if (size > 16)
+    {
+        c.memory = YES;
+        return c;
+    }
+    if (size == 0)
+    {
+        return c;
+    }
+
+    sysvClassifyMember(type, 0, &c);
+    if (c.longDoubles > 0)
+    {
+        // A long double alone is returned in st(0); combined with anything else it is MEMORY.
+        c.x87 = c.longDoubles == 1 && c.otherScalars == 0;
+        c.memory = YES;
+        return c;
+    }
+    for (unsigned i = 0; i < c.eightbytes; i++)
+    {
+        if (c.classes[i] == SysVNoClass)
+        {
+            c.classes[i] = SysVInteger;
+        }
+    }
+    return c;
+}
+
+// Assigns the location of an argument in the frame. Register arguments live in the saved register
+// block (see NSInvocationInternal.h); arguments that are split across an integer and an SSE register
+// (or two SSE registers) have the offset of their second eightbyte in the upper 32 bits of the result.
+static size_t sysvPlaceArgument(const SysVClassification *c, NSUInteger size, NSUInteger alignment,
+                                unsigned *usedGPRegisters, unsigned *usedSSERegisters, NSUInteger *frameLength)
+{
+    if (!c->memory)
+    {
+        unsigned needGP = 0, needSSE = 0;
+        for (unsigned i = 0; i < c->eightbytes; i++)
+        {
+            if (c->classes[i] == SysVSSE)
+            {
+                needSSE++;
+            }
+            else
+            {
+                needGP++;
+            }
+        }
+
+        if (*usedGPRegisters + needGP <= 6 && *usedSSERegisters + needSSE <= 8)
+        {
+            size_t offsets[2] = { 0, 0 };
+            for (unsigned i = 0; i < c->eightbytes; i++)
+            {
+                if (c->classes[i] == SysVSSE)
+                {
+                    offsets[i] = SYSV_SSE_AREA + 16 * (*usedSSERegisters)++;
+                }
+                else
+                {
+                    offsets[i] = 8 * (*usedGPRegisters)++;
+                }
+            }
+
+            BOOL contiguous = c->eightbytes < 2 || (c->classes[0] == SysVInteger && c->classes[1] == SysVInteger);
+            return contiguous ? offsets[0] : (offsets[0] | (offsets[1] << 32));
+        }
+    }
+
+    // Stack arguments occupy whole eightbytes, aligned to their type but at least to 8.
+    NSUInteger stackAlignment = MAX(alignment, 8);
+    *frameLength = ALIGN_TO(*frameLength, stackAlignment);
+    size_t offset = *frameLength;
+    *frameLength += ALIGN_TO(size, 8);
+    return offset;
+}
+
+void __NSSysVStoreArgument(void *frame, size_t offset, NSUInteger size, const void *value)
+{
+    if ((offset >> 32) == 0)
+    {
+        memcpy((char *)frame + offset, value, size);
+        return;
+    }
+
+    size_t offsets[2] = { offset & 0xffffffffu, offset >> 32 };
+    for (unsigned i = 0; i < 2 && size > 8 * i; i++)
+    {
+        memcpy((char *)frame + offsets[i], (const char *)value + 8 * i, MIN(size - 8 * i, (NSUInteger)8));
+    }
+}
+
+void __NSSysVLoadArgument(const void *frame, size_t offset, NSUInteger size, void *value)
+{
+    if ((offset >> 32) == 0)
+    {
+        memcpy(value, (const char *)frame + offset, size);
+        return;
+    }
+
+    size_t offsets[2] = { offset & 0xffffffffu, offset >> 32 };
+    for (unsigned i = 0; i < 2 && size > 8 * i; i++)
+    {
+        memcpy((char *)value + 8 * i, (const char *)frame + offsets[i], MIN(size - 8 * i, (NSUInteger)8));
+    }
+}
+
+// regs holds rax, rdx, the low halves of xmm0 and xmm1, and an x87 flag, as filled in by
+// __invoke__ and consumed by the forwarding entry points.
+BOOL __NSSysVReturnsInX87(const char *type)
+{
+    NSUInteger size = 0, alignment = 0;
+    __NSGetSizeAndAlignment(type, &size, &alignment, NO);
+    return sysvClassify(type, size).x87;
+}
+
+void __NSSysVReturnFromRegisters(const void *regs, const char *type, NSUInteger size, void *value)
+{
+    const uint64_t *r = regs;
+    SysVClassification c = sysvClassify(type, size);
+    if (c.x87)
+    {
+        memcpy(value, r, MIN(size, (NSUInteger)16));
+        return;
+    }
+    unsigned gp = 0, sse = 0;
+    for (unsigned i = 0; i < c.eightbytes && !c.memory; i++)
+    {
+        uint64_t part = c.classes[i] == SysVSSE ? r[2 + sse++] : r[gp++];
+        memcpy((char *)value + 8 * i, &part, MIN(size - 8 * i, (NSUInteger)8));
+    }
+}
+
+void __NSSysVReturnToRegisters(const void *value, const char *type, NSUInteger size, void *regs)
+{
+    uint64_t *r = regs;
+    memset(r, 0, SYSV_RETURN_REGS_SIZE);
+    SysVClassification c = sysvClassify(type, size);
+    if (c.x87)
+    {
+        memcpy(r, value, MIN(size, (NSUInteger)16));
+        r[4] = 1;
+        return;
+    }
+    unsigned gp = 0, sse = 0;
+    for (unsigned i = 0; i < c.eightbytes && !c.memory; i++)
+    {
+        uint64_t part = 0;
+        memcpy(&part, (const char *)value + 8 * i, MIN(size - 8 * i, (NSUInteger)8));
+        if (c.classes[i] == SysVSSE)
+        {
+            r[2 + sse++] = part;
+        }
+        else
+        {
+            r[gp++] = part;
+        }
+    }
+}
+#endif
+
+#if defined(__i386__)
+// i386 (Darwin) results: a struct or union of 1, 2, 4 or 8 bytes whose members are all of such
+// sizes comes back in eax:edx, unless its only member (possibly nested, or an array of one) is a
+// float or double, which comes back in st(0); other aggregates use a hidden pointer; an empty one
+// returns nothing.
+static const char *i386SingleScalar(const char *type)
+{
+    type = stripQualifiersAndComments(type);
+    switch (*type)
+    {
+        case _C_STRUCT_B:
+        case _C_UNION_B:
+        {
+            char end = *type == _C_STRUCT_B ? _C_STRUCT_E : _C_UNION_E;
+            const char *p = type + 1;
+            while (*p != '\0' && *p != '=' && *p != end)
+            {
+                p++;
+            }
+            if (*p != '=')
+            {
+                return NULL;
+            }
+            p++;
+            NSUInteger size = 0, alignment = 0;
+            const char *after = __NSGetSizeAndAlignment(p, &size, &alignment, NO);
+            return (*p != end && *after == end) ? i386SingleScalar(p) : NULL;
+        }
+
+        case _C_ARY_B:
+        {
+            char *p;
+            return strtol(type + 1, &p, 10) == 1 ? i386SingleScalar(p) : NULL;
+        }
+
+        default:
+            return type;
+    }
+}
+
+static BOOL i386FitsInRegisters(const char *type)
+{
+    type = stripQualifiersAndComments(type);
+    NSUInteger size = 0, alignment = 0;
+    __NSGetSizeAndAlignment(type, &size, &alignment, NO);
+    if (size != 1 && size != 2 && size != 4 && size != 8)
+    {
+        return NO;
+    }
+
+    if (*type == _C_STRUCT_B || *type == _C_UNION_B)
+    {
+        char end = *type == _C_STRUCT_B ? _C_STRUCT_E : _C_UNION_E;
+        const char *p = type + 1;
+        while (*p != '\0' && *p != '=' && *p != end)
+        {
+            p++;
+        }
+        if (*p == '=')
+        {
+            p++;
+        }
+        while (*p != '\0' && *p != end)
+        {
+            if (!i386FitsInRegisters(p))
+            {
+                return NO;
+            }
+            NSUInteger memberSize = 0, memberAlignment = 0;
+            p = __NSGetSizeAndAlignment(p, &memberSize, &memberAlignment, NO);
+        }
+    }
+    else if (*type == _C_ARY_B)
+    {
+        char *p;
+        strtol(type + 1, &p, 10);
+        return i386FitsInRegisters(p);
+    }
+    return YES;
+}
+
+BOOL __NSI386ResultInMemory(const char *type, NSUInteger size)
+{
+    type = stripQualifiersAndComments(type);
+    return (*type == _C_STRUCT_B || *type == _C_UNION_B) && size != 0 && !i386FitsInRegisters(type);
+}
+
+char __NSI386X87ResultType(const char *type)
+{
+    type = stripQualifiersAndComments(type);
+    if (*type == _C_FLT || *type == _C_DBL || *type == _C_LNG_DBL)
+    {
+        return *type;
+    }
+    if (*type == _C_STRUCT_B || *type == _C_UNION_B)
+    {
+        const char *scalar = i386FitsInRegisters(type) ? i386SingleScalar(type) : NULL;
+        if (scalar != NULL && (*scalar == _C_FLT || *scalar == _C_DBL))
+        {
+            return *scalar;
+        }
+    }
+    return 0;
 }
 #endif
 
@@ -131,14 +644,14 @@ void __NSARM64ExtendToInt(void *value, const char *type)
     unsigned short usedGPRegisters = 0;
     unsigned short usedFPRegisters = 0;
     _frameLength = 0x80;
-#elif defined(__LP64__)
-    // On x86-64, the first few arguments are passed in registers as long as
-    // they satisfy certain conditions. __CF_forwarding_prep and __invoke__
-    // pack and unpack all register values into a 0xe0-sized block preceeding
-    // the actual stack frame contents. This means frameLength always starts
-    // at 0xe0 and grows from there if there are any on-stack arguments.
-    unsigned short usedGPRegisters = 0;
-    unsigned short usedSSERegisters = 0;
+#elif defined(__x86_64__)
+    // On x86-64, arguments are passed in registers as classified by the System V ABI.
+    // __CF_forwarding_prep and __invoke__ pack and unpack all register values into a
+    // 0xe0-sized block preceeding the actual stack frame contents. This means
+    // frameLength always starts at 0xe0 and grows from there if there are any
+    // on-stack arguments.
+    unsigned usedGPRegisters = 0;
+    unsigned usedSSERegisters = 0;
     _frameLength = 0xe0;
 #endif
 
@@ -216,24 +729,29 @@ void __NSARM64ExtendToInt(void *value, const char *type)
             // type of the return value.
             switch (*stripQualifiersAndComments(_types[0].type))
             {
-#if defined(__arm64__)
                 case _C_UNION_B:
-#endif
                 case _C_STRUCT_B:
                 {
 #if defined(__arm64__)
                     // Larger results, other than double aggregates, are returned through x8.
-                    _stret = ms->size > 16 && __NSARM64DoubleHFACount(currentType) == 0;
-#else
-                    if (frameSize > sizeof(int))
+                    _stret = __NSARM64PassedByReference(currentType, ms->size);
+#elif defined(__x86_64__)
+                    // Results classified as MEMORY are written through a hidden pointer that is
+                    // passed in rdi, ahead of self; smaller aggregates come back in rax, rdx,
+                    // xmm0 and xmm1.
+                    SysVClassification resultClass = sysvClassify(currentType, ms->size);
+                    if (resultClass.memory && !resultClass.x87)
                     {
-                        // Account for the stret return pointer.
+                        _stret = YES;
+                        ++usedGPRegisters;
+                    }
+#else
+                    // On i386 small aggregates come back in eax:edx or st(0); others are written
+                    // through a hidden pointer that is passed on the stack, ahead of self.
+                    if (__NSI386ResultInMemory(currentType, ms->size))
+                    {
                         _frameLength += sizeof(void *);
                         _stret = YES;
-#if __LP64__
-                        // on x86_64, the first GP register (rdi) is used to pass the stret pointer
-                        ++usedGPRegisters;
-#endif
                     }
 #endif
                     break;
@@ -249,74 +767,18 @@ void __NSARM64ExtendToInt(void *value, const char *type)
 #if __arm__
             _frameLength = ALIGN_TO(_frameLength, frameAlignment);
 #elif defined(__arm64__)
-            const char *argType = stripQualifiersAndComments(currentType);
-            unsigned hfaCount = __NSARM64DoubleHFACount(argType);
-            BOOL isFP = argType[0] == _C_FLT || argType[0] == _C_DBL || argType[0] == 'D';
-            BOOL inRegisters = NO;
-            if (isFP || hfaCount)
+            _types[_count].offset = __NSARM64PlaceArgument(currentType, ms->size, ms->alignment, &usedGPRegisters, &usedFPRegisters, &_frameLength);
+#elif defined(__x86_64__)
             {
-                unsigned short registersNeeded = isFP ? 1 : hfaCount;
-                if (usedFPRegisters + registersNeeded <= 8)
-                {
-                    _types[_count].offset = 0x40 + usedFPRegisters * 8;
-                    usedFPRegisters += registersNeeded;
-                    inRegisters = YES;
-                }
-                else
-                {
-                    usedFPRegisters = 8;
-                }
-            }
-            else if (ms->size <= 16)
-            {
-                unsigned short registersNeeded = ALIGN_TO(ms->size, 8) / 8;
-                if (usedGPRegisters + registersNeeded <= 8)
-                {
-                    _types[_count].offset = usedGPRegisters * 8;
-                    usedGPRegisters += registersNeeded;
-                    inRegisters = YES;
-                }
-                else
-                {
-                    usedGPRegisters = 8;
-                }
-            }
-            // FIXME: structs over 16 bytes (other than double aggregates) should be passed by reference.
-            if (!inRegisters)
-            {
-                // Apple's arm64 ABI packs scalar stack arguments by their own size and alignment,
-                // but aggregates still take 8-byte-aligned slots rounded up to 8 bytes.
-                BOOL isAggregate = argType[0] == _C_STRUCT_B || argType[0] == _C_UNION_B || argType[0] == _C_ARY_B;
-                NSUInteger stackAlignment = isAggregate ? MAX(ms->alignment, 8) : ms->alignment;
-                NSUInteger stackSize = isAggregate ? ALIGN_TO(ms->size, 8) : ms->size;
-                _frameLength = ALIGN_TO(_frameLength, stackAlignment);
-                _types[_count].offset = _frameLength;
-                _frameLength += stackSize;
-            }
-#elif __LP64__
-            // FIXME: This is far from being a complete implementation of
-            // the x86-64 calling convention.
-            BOOL isFP = currentType[0] == _C_FLT || currentType[0] == _C_DBL;
-            if (isFP) {
-                unsigned short registersNeeded = ALIGN_TO(frameSize, 16) / 16;
-                if (usedSSERegisters + registersNeeded > 8) {
-                    _types[_count].offset = _frameLength;
-                    _frameLength += frameSize;
-                } else {
-                    _types[_count].offset = 0x30 + usedSSERegisters * 16;
-                    usedSSERegisters += registersNeeded;
-                }
-            } else {
-                unsigned short registersNeeded = ALIGN_TO(frameSize, 8) / 8;
-                if (usedGPRegisters + registersNeeded > 6 || frameSize > 16) {
-                    _types[_count].offset = _frameLength;
-                    _frameLength += frameSize;
-                } else {
-                    _types[_count].offset = usedGPRegisters * 8;
-                    usedGPRegisters += registersNeeded;
-                }
+                SysVClassification classification = sysvClassify(currentType, ms->size);
+                _types[_count].offset = sysvPlaceArgument(&classification, ms->size, ms->alignment,
+                                                          &usedGPRegisters, &usedSSERegisters, &_frameLength);
             }
 #else
+            // The compiler places a long double argument on a 16-byte boundary of the argument
+            // area, although the type encoding it emits says otherwise.
+            if (*stripQualifiersAndComments(currentType) == _C_LNG_DBL)
+                _frameLength = ALIGN_TO(_frameLength, 16);
             _types[_count].offset = _frameLength;
             _frameLength += frameSize;
 #endif
