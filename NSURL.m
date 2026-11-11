@@ -556,6 +556,10 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
              CFEqual(key, kCFURLVolumeSupportsFileProtectionKey) ||
              CFEqual(key, kCFURLVolumeSupportsCompressionKey))
     {
+        // These capabilities are not probed per file system yet: every volume is
+        // reported as lacking them. That is the conservative answer (callers fall
+        // back to the generic code path) and has not been checked against macOS
+        // for any particular file system.
         value = kCFBooleanFalse;
     }
     else if (CFEqual(key, kCFURLVolumeTotalCapacityKey))
