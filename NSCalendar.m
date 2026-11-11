@@ -100,67 +100,67 @@ static int makeCFCalendarComponentVector(NSDateComponents *comps, int *component
     NSInteger weekdayOrdinal = [comps weekdayOrdinal];
 
     int count = 0;
-    if (era != NSUndefinedDateComponent)
+    if (era != NSDateComponentUndefined)
     {
         componentVector[count] = era;
         format[count++] = 'G';
     }
-    if (year != NSUndefinedDateComponent)
+    if (year != NSDateComponentUndefined)
     {
         componentVector[count] = year;
         format[count++] = 'y';
     }
-    if (month != NSUndefinedDateComponent)
+    if (month != NSDateComponentUndefined)
     {
         componentVector[count] = month;
         format[count++] = 'M';
     }
-    if (day != NSUndefinedDateComponent)
+    if (day != NSDateComponentUndefined)
     {
         componentVector[count] = day;
         format[count++] = 'd';
     }
-    if (hour != NSUndefinedDateComponent)
+    if (hour != NSDateComponentUndefined)
     {
         componentVector[count] = hour;
         format[count++] = 'H';
     }
-    if (minute != NSUndefinedDateComponent)
+    if (minute != NSDateComponentUndefined)
     {
         componentVector[count] = minute;
         format[count++] = 'm';
     }
-    if (second != NSUndefinedDateComponent)
+    if (second != NSDateComponentUndefined)
     {
         componentVector[count] = second;
         format[count++] = 's';
     }
-    if (nanosecond != NSUndefinedDateComponent)
+    if (nanosecond != NSDateComponentUndefined)
     {
         componentVector[count] = nanosecond / NSEC_PER_MSEC;
         format[count++] = 'S';
     }
-    if (weekOfYear != NSUndefinedDateComponent)
+    if (weekOfYear != NSDateComponentUndefined)
     {
         componentVector[count] = weekOfYear;
         format[count++] = 'w';
     }
-    if (weekOfMonth != NSUndefinedDateComponent)
+    if (weekOfMonth != NSDateComponentUndefined)
     {
         componentVector[count] = weekOfMonth;
         format[count++] = 'W';
     }
-    if (yearForWeekOfYear != NSUndefinedDateComponent)
+    if (yearForWeekOfYear != NSDateComponentUndefined)
     {
         componentVector[count] = yearForWeekOfYear;
         format[count++] = 'Y';
     }
-    if (weekday != NSUndefinedDateComponent)
+    if (weekday != NSDateComponentUndefined)
     {
         componentVector[count] = weekday;
         format[count++] = 'E';
     }
-    if (weekdayOrdinal != NSUndefinedDateComponent)
+    if (weekdayOrdinal != NSDateComponentUndefined)
     {
         componentVector[count] = weekdayOrdinal;
         format[count++] = 'F';

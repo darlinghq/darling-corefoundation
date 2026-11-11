@@ -65,20 +65,20 @@ typedef struct {
     if (self)
     {
         NSDateComponentParts *parts = (NSDateComponentParts *)object_getIndexedIvars(self);
-        parts->era = NSUndefinedDateComponent;
-        parts->year = NSUndefinedDateComponent;
-        parts->month = NSUndefinedDateComponent;
-        parts->dayOfMonth = NSUndefinedDateComponent;
-        parts->hourOfDay = NSUndefinedDateComponent;
-        parts->minute = NSUndefinedDateComponent;
-        parts->second = NSUndefinedDateComponent;
-        parts->nanosecond = NSUndefinedDateComponent;
-        parts->weekOfYear = NSUndefinedDateComponent;
-        parts->weekOfMonth = NSUndefinedDateComponent;
-        parts->yearWeekOfYear = NSUndefinedDateComponent;
-        parts->weekday = NSUndefinedDateComponent;
-        parts->quarter = NSUndefinedDateComponent;
-        parts->weekdayOrdinal = NSUndefinedDateComponent;
+        parts->era = NSDateComponentUndefined;
+        parts->year = NSDateComponentUndefined;
+        parts->month = NSDateComponentUndefined;
+        parts->dayOfMonth = NSDateComponentUndefined;
+        parts->hourOfDay = NSDateComponentUndefined;
+        parts->minute = NSDateComponentUndefined;
+        parts->second = NSDateComponentUndefined;
+        parts->nanosecond = NSDateComponentUndefined;
+        parts->weekOfYear = NSDateComponentUndefined;
+        parts->weekOfMonth = NSDateComponentUndefined;
+        parts->yearWeekOfYear = NSDateComponentUndefined;
+        parts->weekday = NSDateComponentUndefined;
+        parts->quarter = NSDateComponentUndefined;
+        parts->weekdayOrdinal = NSDateComponentUndefined;
     }
 
     return self;
