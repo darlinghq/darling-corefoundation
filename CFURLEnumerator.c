@@ -29,6 +29,7 @@ struct __CFURLEnumerator {
     CFArrayRef propertyKeys;
     CFMutableArrayRef urlStack;
     CFMutableArrayRef dirFileInfos;
+    Boolean pushedLastItem;
 };
 
 CFComparisonResult _compareFileInfo(const void *fileInfo1, const void *fileInfo2, void *context) {
@@ -257,40 +258,55 @@ CFURLEnumeratorResult CFURLEnumeratorGetNextURL(CFURLEnumeratorRef enumer, CFURL
     }
 
     Boolean isDir = CFBooleanGetValue(CFDictionaryGetValue(fileInfo, fileInfoIsDirKey));
-    CFURLRef item = NULL;
-
-    if (url != NULL) {
-        CFStringRef name = (CFStringRef)CFDictionaryGetValue(fileInfo, fileInfoNameKey);
-        item = CFURLCreateCopyAppendingPathComponent(kCFAllocatorDefault, parent, name, isDir);
-        *url = item;
-    }
+    CFStringRef name = (CFStringRef)CFDictionaryGetValue(fileInfo, fileInfoNameKey);
+    CFURLRef item = CFURLCreateCopyAppendingPathComponent(kCFAllocatorDefault, parent, name, isDir);
 
     if (fileInfo) {
         CFRelease(fileInfo);
     }
 
-    if (isDir && (enumerator->options & kCFURLEnumeratorDescendRecursively) == 0) {
+    if (item == NULL) {
+        return kCFURLEnumeratorError;
+    }
+
+    if (url != NULL) {
+        *url = item;
+    }
+
+    CFURLEnumeratorResult result = kCFURLEnumeratorSuccess;
+
+    enumerator->pushedLastItem = false;
+
+    if (isDir && (enumerator->options & kCFURLEnumeratorDescendRecursively) != 0) {
         if (CFURLEnumeratorPushURL(enumerator, item, error) <= 0) {
-            return kCFURLEnumeratorError; // error populated by push
+            result = kCFURLEnumeratorError; // error populated by push
+        } else {
+            enumerator->pushedLastItem = true;
         }
     }
 
-    if (enumerator->propertyKeys) {
+    if (result == kCFURLEnumeratorSuccess && enumerator->propertyKeys != NULL) {
         CFDictionaryRef properties = CFURLCopyResourcePropertiesForKeys(item, enumerator->propertyKeys, error);
         if (properties != NULL) {
             CFRelease(properties);
-            return kCFURLEnumeratorSuccess;
         } else {
-            return kCFURLEnumeratorError;
+            result = kCFURLEnumeratorError;
         }
-    } else {
-        return kCFURLEnumeratorSuccess;
     }
+
+    if (url == NULL) {
+        CFRelease(item);
+    }
+
+    return result;
 }
 
 void CFURLEnumeratorSkipDescendents(CFURLEnumeratorRef enumer) {
     struct __CFURLEnumerator *enumerator = (struct __CFURLEnumerator *)enumer;
-    enumerator->options &= ~(kCFURLEnumeratorDescendRecursively);
+    if (enumerator != NULL && enumerator->pushedLastItem) {
+        CFURLEnumeratorPopURL(enumerator);
+        enumerator->pushedLastItem = false;
+    }
 }
 
 CFIndex CFURLEnumeratorGetDescendentLevel(CFURLEnumeratorRef enumerator) {
