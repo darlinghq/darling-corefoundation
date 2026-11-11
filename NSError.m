@@ -5,10 +5,19 @@
 //  Copyright (c) 2014 Apportable. All rights reserved.
 //
 
+#import <objc/runtime.h>
 #import <Foundation/NSError.h>
 #import <Foundation/NSError_Private.h>
 
 #import <Foundation/NSDictionary.h>
+#import <Foundation/NSArray.h>
+#import <Foundation/NSCoder.h>
+#import <Foundation/NSData.h>
+#import <Foundation/NSDate.h>
+#import <Foundation/NSException.h>
+#import <Foundation/NSSet.h>
+#import <Foundation/NSURL.h>
+#import <Foundation/NSValue.h>
 #import "ForFoundationOnly.h"
 #import "NSObjectInternal.h"
 
@@ -143,19 +152,44 @@ static NSError *_outOfmemoryError = nil;
 
 + (BOOL)supportsSecureCoding
 {
-    return NO;
+    return YES;
 }
 
 - (id)initWithCoder:(NSCoder *)aDecoder
 {
-#warning TODO: FIXME
-    [self release];
-    return nil;
+    if (![aDecoder allowsKeyedCoding])
+    {
+        [self release];
+        [NSException raise:NSInvalidArgumentException format:@"NSError requires a keyed coder"];
+        return nil;
+    }
+    NSString *domain = [aDecoder decodeObjectOfClass:objc_lookUpClass("NSString") forKey:@"NSDomain"];
+    NSInteger code = [aDecoder decodeIntegerForKey:@"NSCode"];
+    // Values in the user info may only be of these classes; an underlying
+    // error is itself an NSError. NSString and NSNumber are looked up by name:
+    // they live in Foundation, and the 32-bit runtime needs a link-time symbol
+    // for a class named in source.
+    NSSet *infoClasses = [NSSet setWithObjects:
+        [NSDictionary class], [NSArray class], objc_lookUpClass("NSString"), objc_lookUpClass("NSNumber"),
+        [NSData class], [NSDate class], [NSURL class], [NSError class], nil];
+    NSDictionary *userInfo = [aDecoder decodeObjectOfClasses:infoClasses forKey:@"NSUserInfo"];
+    if (domain == nil || (userInfo != nil && ![userInfo isKindOfClass:[NSDictionary class]]))
+    {
+        [self release];
+        return nil;
+    }
+    return [self initWithDomain:domain code:code userInfo:userInfo];
 }
 
 - (void)encodeWithCoder:(NSCoder *)aCoder
 {
-
+    if (![aCoder allowsKeyedCoding])
+    {
+        [NSException raise:NSInvalidArgumentException format:@"NSError requires a keyed coder"];
+    }
+    [aCoder encodeObject:[self domain] forKey:@"NSDomain"];
+    [aCoder encodeInteger:[self code] forKey:@"NSCode"];
+    [aCoder encodeObject:[self userInfo] forKey:@"NSUserInfo"];
 }
 
 @end
