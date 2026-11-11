@@ -70,10 +70,18 @@ static CFDictionaryRef _CFBundleCopyLocTableStrings(CFBundleRef bundle, CFString
     return result;
 }
 
-CF_EXPORT CFDictionaryRef _CFBundleCopyStringTableForLocalization(CFBundleRef bundle, CFStringRef tableName, CFStringRef localizationName) {
+// The strings table of one localization (NULL: the bundle's language search list); never NULL, an empty dictionary stands for "no table".
+// A <table>.loctable is consulted before <table>.strings, and a NULL or empty table name means Localizable.
+// QUIRK: macOS prefers the .loctable entry over a <table>.strings file of the same name, and
+// returns an empty dictionary for a missing table. Neither is documented. Evidence: black-box
+// observation on macOS 27, arm64 (tier 2), vd-upstream/mac-probes/cf-loctable-loader.m.
+// Test: tests/BundleLocTable.m (loctable precedence, missing table).
+CF_EXPORT CFDictionaryRef CFBundleCopyLocalizedStringTableForLocalization(CFBundleRef bundle, CFStringRef tableName, CFStringRef localizationName) {
     CFDictionaryRef stringTable = NULL;
     CFURLRef tableURL = NULL;
     if (!tableName || CFEqual(tableName, CFSTR(""))) tableName = _CFBundleDefaultStringTableName;
+    stringTable = _CFBundleCopyLocTableStrings(bundle, tableName, localizationName);
+    if (stringTable) return stringTable;
     if (localizationName) {
         tableURL = CFBundleCopyResourceURLForLocalization(bundle, tableName, _CFBundleStringTableType, NULL, localizationName);
     } else {
@@ -101,7 +109,7 @@ CF_EXPORT CFDictionaryRef _CFBundleCopyStringTableForLocalization(CFBundleRef bu
         }
         CFRelease(tableURL);
     }
-    if (!stringTable) stringTable = _CFBundleCopyLocTableStrings(bundle, tableName, localizationName);
+    if (!stringTable) stringTable = CFDictionaryCreate(CFGetAllocator(bundle), NULL, NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     return stringTable;
 }
 
@@ -132,8 +140,7 @@ CF_EXPORT CFStringRef CFBundleCopyLocalizedStringForLocalization(CFBundleRef bun
         // Go load the table. First, unlock so we don't hold the lock across file system access.
         __CFUnlock(&bundle->_lock);
         
-        stringTable = _CFBundleCopyStringTableForLocalization(bundle, tableName, localizationName);
-        if (!stringTable) stringTable = CFDictionaryCreate(CFGetAllocator(bundle), NULL, NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        stringTable = CFBundleCopyLocalizedStringTableForLocalization(bundle, tableName, localizationName);
         
         if ((!CFStringHasSuffix(tableName, CFSTR(".nocache")) || !_CFExecutableLinkedOnOrAfter(CFSystemVersionLeopard)) && localizationName == NULL) {
             // Take lock again, because this we will unlock after getting the value out of the table.

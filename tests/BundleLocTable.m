@@ -4,7 +4,7 @@
 #include <sys/stat.h>
 
 CF_EXPORT CFStringRef CFBundleCopyLocalizedStringForLocalization(CFBundleRef, CFStringRef, CFStringRef, CFStringRef, CFStringRef);
-CF_EXPORT CFDictionaryRef _CFBundleCopyStringTableForLocalization(CFBundleRef, CFStringRef, CFStringRef);
+CF_EXPORT CFDictionaryRef CFBundleCopyLocalizedStringTableForLocalization(CFBundleRef, CFStringRef, CFStringRef);
 
 static int failures;
 
@@ -54,9 +54,15 @@ int main(void) {
         expect("explicit localization", [(NSString *)CFBundleCopyLocalizedStringForLocalization(bundle, CFSTR("GREETING"), NULL, NULL, CFSTR("de")) autorelease], @"Hallo");
         expect("missing key returns value", [(NSString *)CFBundleCopyLocalizedString(bundle, CFSTR("MISSING"), CFSTR("fallback"), NULL) autorelease], @"fallback");
         expect("non-string entry returns key", [(NSString *)CFBundleCopyLocalizedString(bundle, CFSTR("PLURAL"), NULL, NULL) autorelease], @"PLURAL");
-        expect(".strings table takes precedence", [(NSString *)CFBundleCopyLocalizedString(bundle, CFSTR("SOURCE"), NULL, CFSTR("Other")) autorelease], @"strings");
+        // QUIRK (see CFBundleCopyLocalizedStringTableForLocalization): .loctable wins over .strings.
+        expect("quirk: .loctable takes precedence over .strings", [(NSString *)CFBundleCopyLocalizedString(bundle, CFSTR("SOURCE"), NULL, CFSTR("Other")) autorelease], @"loctable");
         expect("NSBundle lookup", [[NSBundle bundleWithPath:bundlePath] localizedStringForKey:@"GREETING" value:nil table:nil], @"Hello");
-        expect("table loader, NULL name", [(NSDictionary *)_CFBundleCopyStringTableForLocalization(bundle, NULL, CFSTR("de")) autorelease][@"GREETING"], @"Hallo");
+        expect("table loader, NULL name", [(NSDictionary *)CFBundleCopyLocalizedStringTableForLocalization(bundle, NULL, CFSTR("de")) autorelease][@"GREETING"], @"Hallo");
+
+        NSDictionary *none = [(NSDictionary *)CFBundleCopyLocalizedStringTableForLocalization(bundle, CFSTR("NoSuchTable"), CFSTR("en")) autorelease];
+        expect("quirk: missing table is an empty dictionary", [none isKindOfClass:[NSDictionary class]] && none.count == 0 ? @"empty" : @"other", @"empty");
+        NSDictionary *nofr = [(NSDictionary *)CFBundleCopyLocalizedStringTableForLocalization(bundle, CFSTR("Localizable"), CFSTR("fr")) autorelease];
+        expect("missing localization is an empty dictionary", [nofr isKindOfClass:[NSDictionary class]] && nofr.count == 0 ? @"empty" : @"other", @"empty");
 
         CFRelease(bundle);
         [[NSFileManager defaultManager] removeItemAtPath:root error:NULL];
