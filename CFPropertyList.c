@@ -587,6 +587,19 @@ static void _CFAppendXML0(CFTypeRef object, UInt32 indentation, CFMutableDataRef
         _plistAppendUTF8CString(xmlString, "</");
         _plistAppendCharacters(xmlString, CFXMLPlistTagsUnicode[DICT_IX], DICT_TAG_LENGTH);
         _plistAppendUTF8CString(xmlString, ">\n");
+    } else if (typeID == _CFKeyedArchiverUIDGetTypeID()) {
+        // A keyed archiver UID is written as a one-entry dictionary, the form the XML reader turns back into a UID.
+        char uidText[32];
+        snprintf(uidText, sizeof(uidText), "%u", (unsigned) _CFKeyedArchiverUIDGetValue((CFKeyedArchiverUIDRef) object));
+        _plistAppendUTF8CString(xmlString, "<dict>\n");
+        _appendIndents(indentation + 1, xmlString);
+        _plistAppendUTF8CString(xmlString, "<key>CF$UID</key>\n");
+        _appendIndents(indentation + 1, xmlString);
+        _plistAppendUTF8CString(xmlString, "<integer>");
+        _plistAppendUTF8CString(xmlString, uidText);
+        _plistAppendUTF8CString(xmlString, "</integer>\n");
+        _appendIndents(indentation, xmlString);
+        _plistAppendUTF8CString(xmlString, "</dict>\n");
     } else if (typeID == datatype) {
         _plistAppendUTF8CString(xmlString, "<");
         _plistAppendCharacters(xmlString, CFXMLPlistTagsUnicode[DATA_IX], DATA_TAG_LENGTH);

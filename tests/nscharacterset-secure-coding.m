@@ -166,6 +166,14 @@ static void check_archive_keys(void) {
     NSDictionary *stringPlist = [NSPropertyListSerialization propertyListWithData:stringArchive options:0 format:NULL error:NULL];
     CHECK([stringPlist[@"$objects"] containsObject:@"xyz"]);
 
+    // test_quirk_empty_string_set_stores_nil_string (MC26.13, macOS 26.7.3): the empty set keeps the
+    // NSString key but its value is nil, not an archived empty string.
+    NSCharacterSet *emptySet = [NSCharacterSet characterSetWithCharactersInString:@""];
+    CHECK([archivedKeys(emptySet) isEqual:@[@"NSString"]]);
+    NSData *emptyArchive = [NSKeyedArchiver archivedDataWithRootObject:emptySet requiringSecureCoding:YES error:NULL];
+    NSDictionary *emptyPlist = [NSPropertyListSerialization propertyListWithData:emptyArchive options:0 format:NULL error:NULL];
+    CHECK(![emptyPlist[@"$objects"] containsObject:@""]);
+
     // Everything else is a bitmap: the BMP plane, then (plane number, plane) pairs.
     NSCharacterSet *bitmap = [NSCharacterSet characterSetWithCharactersInString:@"a\U0001F600"];
     CHECK([archivedKeys(bitmap) isEqual:@[@"NSBitmap"]]);
