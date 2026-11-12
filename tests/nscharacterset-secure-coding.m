@@ -73,6 +73,14 @@ static id archivedValue(id set, NSString *key) {
     return plist[@"$objects"][1][key];
 }
 
+// The archived class name; the class record sits at a different index depending on how many values precede it.
+static BOOL archiveNamesClass(NSDictionary *plist, NSString *name) {
+    for (id object in plist[@"$objects"])
+        if ([object isKindOfClass:[NSDictionary class]] && [object[@"$classname"] isEqual:name])
+            return YES;
+    return NO;
+}
+
 static NSCharacterSet *roundTrip(NSCharacterSet *set, Class cls) {
     NSError *error = nil;
     NSData *data = [NSKeyedArchiver archivedDataWithRootObject:set requiringSecureCoding:YES error:&error];
@@ -123,7 +131,7 @@ static void check_round_trips(void) {
         // Whether the archive names the mutable class (some immutable sets are instances of a mutable subclass on macOS).
         NSData *archived = [NSKeyedArchiver archivedDataWithRootObject:set requiringSecureCoding:YES error:NULL];
         NSDictionary *plist = [NSPropertyListSerialization propertyListWithData:archived options:0 format:NULL error:NULL];
-        BOOL isMutable = [plist[@"$objects"][2][@"$classname"] isEqual:@"NSMutableCharacterSet"];
+        BOOL isMutable = archiveNamesClass(plist, @"NSMutableCharacterSet");
         NSCharacterSet *back = roundTrip(set, [NSCharacterSet class]);
         if (back && !sameMembers(set, back)) { printf("FAIL: membership differs after the round trip of %s\n", [[set description] UTF8String]); failures++; }
         if (isMutable) {
@@ -172,7 +180,7 @@ static void check_archive_keys(void) {
     NSMutableCharacterSet *m = [NSMutableCharacterSet characterSetWithCharactersInString:@"abc"];
     NSData *data = [NSKeyedArchiver archivedDataWithRootObject:m requiringSecureCoding:YES error:NULL];
     NSDictionary *plist = [NSPropertyListSerialization propertyListWithData:data options:0 format:NULL error:NULL];
-    CHECK([plist[@"$objects"][2][@"$classname"] isEqual:@"NSMutableCharacterSet"]);
+    CHECK(archiveNamesClass(plist, @"NSMutableCharacterSet"));
 }
 
 static void check_default_archiver(void) {
