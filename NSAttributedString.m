@@ -9,6 +9,8 @@
 #import "NSObjectInternal.h"
 #import <objc/runtime.h>
 
+extern Boolean _CFAttributedStringIsMutable(CFAttributedStringRef aStr);
+
 // These are in Foundation
 /*
 @implementation NSAttributedString
@@ -108,6 +110,12 @@ static BOOL _rangeCheckIndex(__NSCFAttributedString *self, NSUInteger index)
 
 - (Class)classForCoder
 {
+    // Mutable strings archive as NSMutableAttributedString so that they
+    // decode as mutable.
+    if (_CFAttributedStringIsMutable((CFAttributedStringRef)self))
+    {
+        return [objc_getClass("NSMutableAttributedString") self];
+    }
     return [objc_getClass("NSAttributedString") self];
 }
 
