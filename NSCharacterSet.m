@@ -10,6 +10,7 @@
 #import "NSCFType.h"
 #import "CFInternal.h"
 #import "NSObjectInternal.h"
+#import "CFCharacterSetPriv.h"
 
 extern Boolean __CFCharacterSetIsMutable(CFCharacterSetRef cset);
 extern void CFCharacterSetFast(CFMutableCharacterSetRef theSet);
@@ -228,11 +229,110 @@ CF_PRIVATE
     return NO;
 }
 
++ (BOOL)supportsSecureCoding
+{
+    return YES;
+}
+
+// Keyed archive layout: one of NSBuiltinID (a predefined set), NSRange (location
+// in the high 32 bits, length in the low 32), NSString (a BMP-only set kept as a
+// string) or NSBitmap (the bitmap representation); NSIsInverted marks an
+// inverted builtin, range or string set. Predefined sets that CoreFoundation
+// archives with their bitmap too (symbol, newline) use NSBitmap together with
+// NSBuiltinID2 and NSIsInverted2.
+static const NSUInteger kBitmapPlaneSize = 8192;
+static const NSUInteger kMaxBitmapPlanes = 16;
+
+static CFCharacterSetRef CreateCharacterSetFromArchive(NSCoder *coder)
+{
+    if (![coder allowsKeyedCoding])
+    {
+        NSData *bitmap = [coder decodeObject];
+        if (![bitmap isKindOfClass:objc_lookUpClass("NSData")])
+        {
+            return NULL;
+        }
+        return CFCharacterSetCreateWithBitmapRepresentation(kCFAllocatorDefault, (CFDataRef)bitmap);
+    }
+
+    if ([coder containsValueForKey:@"NSBitmap"])
+    {
+        NSUInteger length = 0;
+        const uint8_t *bytes = [coder decodeBytesForKey:@"NSBitmap" returnedLength:&length];
+        // A bitmap is the BMP plane followed by (plane number, plane bits) pairs for other planes.
+        if (bytes == NULL || length < kBitmapPlaneSize || (length - kBitmapPlaneSize) % (kBitmapPlaneSize + 1) != 0 ||
+            (length - kBitmapPlaneSize) / (kBitmapPlaneSize + 1) > kMaxBitmapPlanes)
+        {
+            return NULL;
+        }
+        CFDataRef data = CFDataCreate(kCFAllocatorDefault, bytes, length);
+        CFCharacterSetRef set = CFCharacterSetCreateWithBitmapRepresentation(kCFAllocatorDefault, data);
+        CFRelease(data);
+        return set;
+    }
+
+    CFCharacterSetRef set = NULL;
+    if ([coder containsValueForKey:@"NSBuiltinID"])
+    {
+        NSInteger identifier = [coder decodeIntegerForKey:@"NSBuiltinID"];
+        if (identifier < kCFCharacterSetControl || identifier > kCFCharacterSetNewline)
+        {
+            return NULL;
+        }
+        set = (CFCharacterSetRef)CFRetain(CFCharacterSetGetPredefined((CFCharacterSetPredefinedSet)identifier));
+    }
+    else if ([coder containsValueForKey:@"NSRange"])
+    {
+        uint64_t packed = (uint64_t)[coder decodeInt64ForKey:@"NSRange"];
+        uint64_t location = packed >> 32;
+        uint64_t length = packed & 0xffffffffu;
+        if (location + length > 0x110000)
+        {
+            return NULL;
+        }
+        set = CFCharacterSetCreateWithCharactersInRange(kCFAllocatorDefault, CFRangeMake((CFIndex)location, (CFIndex)length));
+    }
+    else if ([coder containsValueForKey:@"NSString"])
+    {
+        NSString *string = [coder decodeObjectOfClass:objc_lookUpClass("NSString") forKey:@"NSString"];
+        if (string == nil)
+        {
+            return NULL;
+        }
+        set = CFCharacterSetCreateWithCharactersInString(kCFAllocatorDefault, (CFStringRef)string);
+    }
+    else
+    {
+        return NULL;
+    }
+
+    if ([coder decodeBoolForKey:@"NSIsInverted"])
+    {
+        CFCharacterSetRef inverted = CFCharacterSetCreateInvertedSet(kCFAllocatorDefault, set);
+        CFRelease(set);
+        set = inverted;
+    }
+    return set;
+}
+
+// self is a plain placeholder instance; the result is a CoreFoundation character set.
 - (id)initWithCoder:(NSCoder *)aDecoder
 {
-    NSRequestConcreteImplementation();
+    BOOL wantsMutable = [self isKindOfClass:[NSMutableCharacterSet class]];
     [self release];
-    return nil;
+
+    CFCharacterSetRef set = CreateCharacterSetFromArchive(aDecoder);
+    if (set == NULL)
+    {
+        return nil;
+    }
+    if (wantsMutable && !__CFCharacterSetIsMutable(set))
+    {
+        CFCharacterSetRef mutableSet = CFCharacterSetCreateMutableCopy(kCFAllocatorDefault, set);
+        CFRelease(set);
+        set = mutableSet;
+    }
+    return (id)set;
 }
 
 - (void)encodeWithCoder:(NSCoder *)aCoder
@@ -422,7 +522,62 @@ CF_PRIVATE
 
 - (void)encodeWithCoder:(NSCoder *)coder
 {
-    
+    CFCharacterSetRef set = (CFCharacterSetRef)self;
+    if (![coder allowsKeyedCoding])
+    {
+        [coder encodeObject:[self bitmapRepresentation]];
+        return;
+    }
+
+    BOOL inverted = _CFCharacterSetIsInverted(set);
+    switch (_CFCharacterSetGetKeyedCodingType(set))
+    {
+        case kCFCharacterSetKeyedCodingTypeBuiltin:
+            [coder encodeInteger:_CFCharacterSetGetKeyedCodingBuiltinType(set) forKey:@"NSBuiltinID"];
+            if (inverted)
+            {
+                [coder encodeBool:YES forKey:@"NSIsInverted"];
+            }
+            break;
+        case kCFCharacterSetKeyedCodingTypeBuiltinAndBitmap:
+        {
+            NSData *bitmap = [self bitmapRepresentation];
+            [coder encodeBytes:[bitmap bytes] length:[bitmap length] forKey:@"NSBitmap"];
+            [coder encodeInteger:_CFCharacterSetGetKeyedCodingBuiltinType(set) forKey:@"NSBuiltinID2"];
+            if (inverted)
+            {
+                [coder encodeBool:YES forKey:@"NSIsInverted2"];
+            }
+            break;
+        }
+        case kCFCharacterSetKeyedCodingTypeRange:
+        {
+            CFRange range = _CFCharacterSetGetKeyedCodingRange(set);
+            [coder encodeInt64:(int64_t)(((uint64_t)range.location << 32) | (uint64_t)range.length) forKey:@"NSRange"];
+            if (inverted)
+            {
+                [coder encodeBool:YES forKey:@"NSIsInverted"];
+            }
+            break;
+        }
+        case kCFCharacterSetKeyedCodingTypeString:
+        {
+            NSString *string = (NSString *)_CFCharacterSetCreateKeyedCodingString(set);
+            [coder encodeObject:string forKey:@"NSString"];
+            [string release];
+            if (inverted)
+            {
+                [coder encodeBool:YES forKey:@"NSIsInverted"];
+            }
+            break;
+        }
+        default:
+        {
+            NSData *bitmap = [self bitmapRepresentation];
+            [coder encodeBytes:[bitmap bytes] length:[bitmap length] forKey:@"NSBitmap"];
+            break;
+        }
+    }
 }
 
 - (Class)classForCoder
