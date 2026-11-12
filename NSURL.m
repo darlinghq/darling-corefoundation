@@ -18,6 +18,7 @@
 #import <objc/runtime.h>
 #include <sys/statvfs.h>
 #include <sys/stat.h>
+#include <sys/xattr.h>
 #include <dlfcn.h>
 #include <limits.h>
 
@@ -274,6 +275,78 @@ static CFStringRef CFURLCreateTypeIdentifier(CFURLRef url, CFErrorRef *error)
     return result;
 }
 
+// The Finder flags live in bytes 8 and 9 (big endian) of the 32-byte "com.apple.FinderInfo"
+// extended attribute; kExtensionIsHidden is the 0x0010 bit of that word.
+enum {
+    kFinderInfoSize = 32,
+    kFinderFlagsOffset = 8,
+    kFinderExtensionIsHidden = 0x0010,
+};
+
+// Reads the FinderInfo of the item itself (a symbolic link is not followed). Returns false
+// with errno set when the item cannot be accessed; an item without FinderInfo, or on a file
+// system that cannot hold extended attributes, reads as all zeros.
+static Boolean CFURLReadFinderInfo(CFURLRef url, UInt8 *info)
+{
+    UInt8 path[PATH_MAX] = { 0 };
+
+    memset(info, 0, kFinderInfoSize);
+    if (!CFURLGetFileSystemRepresentation(url, true, path, PATH_MAX))
+    {
+        errno = EINVAL;
+        return false;
+    }
+
+    ssize_t length = getxattr((const char *)path, XATTR_FINDERINFO_NAME, info, kFinderInfoSize, 0, XATTR_NOFOLLOW);
+    if (length < 0)
+    {
+        if (errno == ENOATTR || errno == ENOTSUP || errno == EPERM)
+        {
+            return true;
+        }
+        return false;
+    }
+    return true;
+}
+
+static Boolean CFURLCopyExtensionIsHidden(CFURLRef url, Boolean *hidden)
+{
+    UInt8 info[kFinderInfoSize];
+
+    if (!CFURLReadFinderInfo(url, info))
+    {
+        return false;
+    }
+    *hidden = (((info[kFinderFlagsOffset] << 8) | info[kFinderFlagsOffset + 1]) & kFinderExtensionIsHidden) != 0;
+    return true;
+}
+
+// Sets or clears the extension-hidden flag, leaving the rest of the FinderInfo as it is.
+static Boolean CFURLSetExtensionIsHidden(CFURLRef url, Boolean hidden)
+{
+    UInt8 info[kFinderInfoSize];
+    UInt8 path[PATH_MAX] = { 0 };
+
+    if (!CFURLReadFinderInfo(url, info))
+    {
+        return false;
+    }
+
+    UInt16 flags = (info[kFinderFlagsOffset] << 8) | info[kFinderFlagsOffset + 1];
+    UInt16 updated = hidden ? (flags | kFinderExtensionIsHidden) : (flags & ~kFinderExtensionIsHidden);
+    if (updated == flags && (hidden == false))
+    {
+        // Nothing to clear, and no attribute needs to be created for that.
+        return true;
+    }
+
+    info[kFinderFlagsOffset] = updated >> 8;
+    info[kFinderFlagsOffset + 1] = updated & 0xFF;
+
+    CFURLGetFileSystemRepresentation(url, true, path, PATH_MAX);
+    return setxattr((const char *)path, XATTR_FINDERINFO_NAME, info, kFinderInfoSize, 0, XATTR_NOFOLLOW) == 0;
+}
+
 static pthread_mutex_t resInfoLock = PTHREAD_MUTEX_INITIALIZER;
 
 static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErrorRef *error)
@@ -383,7 +456,18 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
     }
     else if (CFEqual(key, kCFURLHasHiddenExtensionKey))
     {
-        value = kCFBooleanFalse;
+        // Key for whether the Finder hides the file name extension, returned as a CFBoolean
+        // object from the extension-hidden bit of the item's FinderInfo.
+        Boolean hidden = false;
+
+        if (CFURLCopyExtensionIsHidden(url, &hidden))
+        {
+            value = hidden ? kCFBooleanTrue : kCFBooleanFalse;
+        }
+        else
+        {
+            posixError(error);
+        }
     }
     else if (CFEqual(key, kCFURLCreationDateKey))
     {
@@ -914,7 +998,14 @@ static CFTypeRef CFURLSetPropertyForKey(CFURLRef url, CFStringRef key, CFTypeRef
     }
     else if (CFEqual(key, kCFURLHasHiddenExtensionKey) && CFGetTypeID(value) == CFBooleanGetTypeID())
     {
-        acceptedValue = CFRetain(value);
+        if (CFURLSetExtensionIsHidden(url, CFBooleanGetValue(value)))
+        {
+            acceptedValue = CFRetain(value);
+        }
+        else
+        {
+            posixError(error);
+        }
     }
     else if (CFEqual(key, kCFURLCreationDateKey) && CFGetTypeID(value) == CFDateGetTypeID())
     {
