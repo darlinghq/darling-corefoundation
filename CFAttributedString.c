@@ -755,3 +755,8 @@ void _CFAttributedStringSetMutable(CFAttributedStringRef aStr, Boolean isMutable
 {
     ((__CFAttributedString *)aStr)->_isMutable = isMutable;
 }
+
+Boolean _CFAttributedStringIsMutable(CFAttributedStringRef aStr)
+{
+    return ((__CFAttributedString *)aStr)->_isMutable;
+}

@@ -2095,7 +2095,8 @@ void CFCharacterSetAddCharactersInRange(CFMutableCharacterSetRef theSet, CFRange
                 __CFCSetPutHasHashValue(theSet, false);
                 return;
             }
-        } else if (__CFCSetIsString(theSet) && __CFCSetStringLength(theSet) + theRange.length < __kCFStringCharSetMax) {
+        } else if (__CFCSetIsString(theSet) && theRange.location + theRange.length <= 0x10000 && __CFCSetStringLength(theSet) + theRange.length < __kCFStringCharSetMax) {
+            // Only BMP ranges fit the UTF-16 string buffer; anything else takes the bitmap path below.
             UniChar *buffer;
             if (!__CFCSetStringBuffer(theSet))
 				__CFCSetPutStringBuffer(theSet, (UniChar *)CFAllocatorAllocate(CFGetAllocator(theSet), __kCFStringCharSetMax * sizeof(UniChar), 0));
@@ -2161,7 +2162,8 @@ void CFCharacterSetRemoveCharactersInRange(CFMutableCharacterSetRef theSet, CFRa
                 __CFCSetPutHasHashValue(theSet, false);
                 return;
             }
-        } else if (__CFCSetIsString(theSet) && __CFCSetStringLength(theSet) + theRange.length < __kCFStringCharSetMax) {
+        } else if (__CFCSetIsString(theSet) && theRange.location + theRange.length <= 0x10000 && __CFCSetStringLength(theSet) + theRange.length < __kCFStringCharSetMax) {
+            // Only BMP ranges fit the UTF-16 string buffer; anything else takes the bitmap path below.
             UniChar *buffer;
             if (!__CFCSetStringBuffer(theSet))
 				__CFCSetPutStringBuffer(theSet, (UniChar *)CFAllocatorAllocate(CFGetAllocator(theSet), __kCFStringCharSetMax * sizeof(UniChar), 0));
