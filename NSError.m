@@ -150,6 +150,34 @@ static NSError *_outOfmemoryError = nil;
     return [[NSError allocWithZone:zone] initWithDomain:[self domain] code:[self code] userInfo:[self userInfo]];
 }
 
+- (NSUInteger)hash
+{
+    return [_domain hash] + (NSUInteger)_code;
+}
+
+- (BOOL)isEqual:(id)other
+{
+    if (other == self)
+    {
+        return YES;
+    }
+    if (![other isKindOfClass:[NSError class]])
+    {
+        return NO;
+    }
+    if (_code != [other code] || ![_domain isEqual:[other domain]])
+    {
+        return NO;
+    }
+    // A missing user info and an empty one are the same.
+    NSDictionary *otherInfo = [other userInfo];
+    if ([_userInfo count] == 0 && [otherInfo count] == 0)
+    {
+        return YES;
+    }
+    return [_userInfo isEqual:otherInfo];
+}
+
 + (BOOL)supportsSecureCoding
 {
     return YES;
