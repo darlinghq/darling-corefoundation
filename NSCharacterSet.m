@@ -295,9 +295,17 @@ static CFCharacterSetRef CreateCharacterSetFromArchive(NSCoder *coder)
     else if ([coder containsValueForKey:@"NSString"])
     {
         NSString *string = [coder decodeObjectOfClass:objc_lookUpClass("NSString") forKey:@"NSString"];
-        if (string == nil)
+        // QUIRK: the empty set is archived with a nil string under NSString, so a nil value
+        // is an empty set unless decoding failed (a coder that records failures says so).
+        // Not documented. Evidence: black-box observation on macOS 26.7.3 (tier 2), MC26.13.
+        // Test: test_quirk_empty_string_set_stores_nil_string in tests/nscharacterset-secure-coding.m
+        if (string == nil && [coder respondsToSelector:@selector(error)] && [(id)coder error] != nil)
         {
             return NULL;
+        }
+        if (string == nil)
+        {
+            string = @"";
         }
         set = CFCharacterSetCreateWithCharactersInString(kCFAllocatorDefault, (CFStringRef)string);
     }
@@ -563,7 +571,8 @@ static CFCharacterSetRef CreateCharacterSetFromArchive(NSCoder *coder)
         case kCFCharacterSetKeyedCodingTypeString:
         {
             NSString *string = (NSString *)_CFCharacterSetCreateKeyedCodingString(set);
-            [coder encodeObject:string forKey:@"NSString"];
+            // QUIRK: an empty string is archived as a nil value (see the decoder above).
+            [coder encodeObject:([string length] > 0 ? string : nil) forKey:@"NSString"];
             [string release];
             if (inverted)
             {
