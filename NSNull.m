@@ -13,7 +13,7 @@
 
 + (BOOL)supportsSecureCoding
 {
-    return NO;
+    return YES;
 }
 
 + (id)null

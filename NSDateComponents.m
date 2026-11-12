@@ -7,6 +7,9 @@
 
 #import "NSCalendarInternal.h"
 #import <Foundation/NSKeyValueObserving.h>
+#import <Foundation/NSCoder.h>
+#import <Foundation/NSException.h>
+#import <objc/message.h>
 #import "ForFoundationOnly.h"
 
 typedef struct {
@@ -27,6 +30,7 @@ typedef struct {
     NSInteger weekdayOrdinal;
     NSCalendar *calendar;
     NSTimeZone *timeZone;
+    BOOL leapMonth;
 } NSDateComponentParts;
 
 @implementation NSDateComponents
@@ -55,6 +59,7 @@ typedef struct {
     copy.weekdayOrdinal = self.weekdayOrdinal;
     copy.calendar = self.calendar;
     copy.timeZone = self.timeZone;
+    [copy setLeapMonth:[self isLeapMonth]];
     return copy;
 }
 
@@ -311,6 +316,89 @@ typedef struct {
         [parts->timeZone release];
         parts->timeZone = [timeZone retain];
     }
+}
+
+- (BOOL)isLeapMonth
+{
+    NSDateComponentParts *parts = (NSDateComponentParts *)object_getIndexedIvars(self);
+    return parts->leapMonth;
+}
+
+- (void)setLeapMonth:(BOOL)leapMonth
+{
+    NSDateComponentParts *parts = (NSDateComponentParts *)object_getIndexedIvars(self);
+    parts->leapMonth = leapMonth;
+}
+
++ (BOOL)supportsSecureCoding
+{
+    return YES;
+}
+
+// Only the components that are set are archived, as NSDateComponentUndefined
+// marks the others; the repeated-day flag is always archived as NO because
+// this class does not track it.
+- (void)encodeWithCoder:(NSCoder *)coder
+{
+    if (![coder allowsKeyedCoding])
+    {
+        [NSException raise:NSInvalidArgumentException format:@"NSDateComponents requires a keyed coder"];
+        return;
+    }
+    struct { NSString *key; SEL getter; } fields[] = {
+        { @"NS.era", @selector(era) }, { @"NS.year", @selector(year) }, { @"NS.month", @selector(month) },
+        { @"NS.day", @selector(day) }, { @"NS.hour", @selector(hour) }, { @"NS.minute", @selector(minute) },
+        { @"NS.second", @selector(second) }, { @"NS.nanosec", @selector(nanosecond) },
+        { @"NS.weekOfYear", @selector(weekOfYear) }, { @"NS.weekOfMonth", @selector(weekOfMonth) },
+        { @"NS.yearForWOY", @selector(yearForWeekOfYear) }, { @"NS.weekday", @selector(weekday) },
+        { @"NS.quarter", @selector(quarter) }, { @"NS.weekdayOrdinal", @selector(weekdayOrdinal) },
+    };
+    for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++)
+    {
+        NSInteger value = ((NSInteger (*)(id, SEL))objc_msgSend)(self, fields[i].getter);
+        if (value != NSDateComponentUndefined)
+        {
+            [coder encodeInteger:value forKey:fields[i].key];
+        }
+    }
+    [coder encodeBool:[self isLeapMonth] forKey:@"NS.leapMonth"];
+    [coder encodeBool:NO forKey:@"NS.repeatedDay"];
+    [coder encodeObject:[self calendar] forKey:@"NS.calendar"];
+    [coder encodeObject:[self timeZone] forKey:@"NS.timezone"];
+}
+
+- (id)initWithCoder:(NSCoder *)coder
+{
+    if (![coder allowsKeyedCoding])
+    {
+        [self release];
+        [NSException raise:NSInvalidArgumentException format:@"NSDateComponents requires a keyed coder"];
+        return nil;
+    }
+    self = [self init];
+    if (self == nil)
+    {
+        return nil;
+    }
+    struct { NSString *key; SEL setter; } fields[] = {
+        { @"NS.era", @selector(setEra:) }, { @"NS.year", @selector(setYear:) }, { @"NS.month", @selector(setMonth:) },
+        { @"NS.day", @selector(setDay:) }, { @"NS.hour", @selector(setHour:) }, { @"NS.minute", @selector(setMinute:) },
+        { @"NS.second", @selector(setSecond:) }, { @"NS.nanosec", @selector(setNanosecond:) },
+        { @"NS.weekOfYear", @selector(setWeekOfYear:) }, { @"NS.weekOfMonth", @selector(setWeekOfMonth:) },
+        { @"NS.yearForWOY", @selector(setYearForWeekOfYear:) }, { @"NS.weekday", @selector(setWeekday:) },
+        { @"NS.quarter", @selector(setQuarter:) }, { @"NS.weekdayOrdinal", @selector(setWeekdayOrdinal:) },
+    };
+    for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++)
+    {
+        if ([coder containsValueForKey:fields[i].key])
+        {
+            ((void (*)(id, SEL, NSInteger))objc_msgSend)(self, fields[i].setter, [coder decodeIntegerForKey:fields[i].key]);
+        }
+    }
+    [self setLeapMonth:[coder decodeBoolForKey:@"NS.leapMonth"]];
+    [self setCalendar:[coder decodeObjectOfClass:[NSCalendar class] forKey:@"NS.calendar"]];
+    [self setTimeZone:[coder decodeObjectOfClass:[NSTimeZone class] forKey:@"NS.timezone"]];
+    return self;
 }
 
 -(NSDate *)date

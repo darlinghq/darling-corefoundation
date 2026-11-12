@@ -5,8 +5,12 @@
 //  Copyright (c) 2014 Apportable. All rights reserved.
 //
 
+#import <objc/runtime.h>
 #import <Foundation/NSTimeZone.h>
 #import <Foundation/NSLocale.h>
+#import <Foundation/NSCoder.h>
+#import <Foundation/NSException.h>
+#import <Foundation/NSString.h>
 #import "NSCalendarInternal.h"
 #import "NSObjectInternal.h"
 
@@ -53,6 +57,11 @@ const NSCalendarIdentifier NSCalendarIdentifierRepublicOfChina = @"roc";
     {
         return [super allocWithZone:zone];
     }
+}
+
++ (BOOL)supportsSecureCoding
+{
+    return YES;
 }
 
 + (id)currentCalendar
@@ -581,6 +590,65 @@ US Locale Fiscal Quarters:
 - (NSString *)calendarIdentifier
 {
     return (NSString *)CFCalendarGetIdentifier((CFCalendarRef)self);
+}
+
+- (Class)classForCoder
+{
+    return [NSCalendar class];
+}
+
+- (void)encodeWithCoder:(NSCoder *)coder
+{
+    if (![coder allowsKeyedCoding])
+    {
+        [NSException raise:NSInvalidArgumentException format:@"NSCalendar requires a keyed coder"];
+        return;
+    }
+    [coder encodeObject:[self calendarIdentifier] forKey:@"NS.identifier"];
+    [coder encodeObject:[self locale] forKey:@"NS.locale"];
+    [coder encodeObject:[self timeZone] forKey:@"NS.timezone"];
+    [coder encodeInteger:(NSInteger)[self firstWeekday] forKey:@"NS.firstwkdy"];
+    [coder encodeInteger:(NSInteger)[self minimumDaysInFirstWeek] forKey:@"NS.mindays"];
+}
+
+// self is the shared placeholder from +allocWithZone:, which must not be released.
+- (id)initWithCoder:(NSCoder *)coder
+{
+    if (![coder allowsKeyedCoding])
+    {
+        [NSException raise:NSInvalidArgumentException format:@"NSCalendar requires a keyed coder"];
+        return nil;
+    }
+    NSString *identifier = [coder decodeObjectOfClass:objc_lookUpClass("NSString") forKey:@"NS.identifier"];
+    NSLocale *locale = [coder decodeObjectOfClass:[NSLocale class] forKey:@"NS.locale"];
+    NSTimeZone *timeZone = [coder decodeObjectOfClass:[NSTimeZone class] forKey:@"NS.timezone"];
+    if (identifier == nil)
+    {
+        return nil;
+    }
+    CFCalendarRef calendar = CFCalendarCreateWithIdentifier(kCFAllocatorDefault, (CFStringRef)identifier);
+    if (calendar == NULL)
+    {
+        return nil;
+    }
+    if (locale != nil)
+    {
+        CFCalendarSetLocale(calendar, (CFLocaleRef)locale);
+    }
+    if (timeZone != nil)
+    {
+        CFCalendarSetTimeZone(calendar, (CFTimeZoneRef)timeZone);
+    }
+    // After the locale and time zone: changing either rebuilds the ICU calendar, which resets these two.
+    if ([coder containsValueForKey:@"NS.firstwkdy"])
+    {
+        CFCalendarSetFirstWeekday(calendar, (CFIndex)[coder decodeIntegerForKey:@"NS.firstwkdy"]);
+    }
+    if ([coder containsValueForKey:@"NS.mindays"])
+    {
+        CFCalendarSetMinimumDaysInFirstWeek(calendar, (CFIndex)[coder decodeIntegerForKey:@"NS.mindays"]);
+    }
+    return (id)calendar;
 }
 
 - (id)copyWithZone:(NSZone *)zone
