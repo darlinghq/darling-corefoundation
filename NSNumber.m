@@ -36,6 +36,22 @@ static BOOL getSInt128Low64(CFNumberRef number, uint64_t *out)
     return YES;
 }
 
+// CFNumberCompare() only accepts numbers; a boolean (NSNumber's @YES and @NO)
+// is compared as the number 1 or 0, so booleans and numbers order and compare
+// equal against each other.
+static CFComparisonResult __NSCFNumberCompareWithNumberOrBoolean(CFNumberRef number, CFTypeRef other)
+{
+    if (CFGetTypeID(other) == CFBooleanGetTypeID())
+    {
+        SInt8 value = CFBooleanGetValue((CFBooleanRef)other) ? 1 : 0;
+        CFNumberRef asNumber = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt8Type, &value);
+        CFComparisonResult result = CFNumberCompare(number, asNumber, NULL);
+        CFRelease(asNumber);
+        return result;
+    }
+    return CFNumberCompare(number, (CFNumberRef)other, NULL);
+}
+
 @implementation __NSCFNumber
 
 + (BOOL)automaticallyNotifiesObserversForKey:(NSString *)key
@@ -51,12 +67,12 @@ static BOOL getSInt128Low64(CFNumberRef number, uint64_t *out)
         @throw [NSException exceptionWithName:NSInvalidArgumentException reason:@"nil argument" userInfo:nil];
         return NSOrderedSame;
     }
-    return (NSComparisonResult)CFNumberCompare((CFNumberRef)self, (CFNumberRef)other, NULL);
+    return (NSComparisonResult)__NSCFNumberCompareWithNumberOrBoolean((CFNumberRef)self, (CFTypeRef)other);
 }
 
 - (NSComparisonResult)_reverseCompare:(id)other
 {
-    CFComparisonResult result = CFNumberCompare((CFNumberRef)self, (CFNumberRef)other, NULL);
+    CFComparisonResult result = __NSCFNumberCompareWithNumberOrBoolean((CFNumberRef)self, (CFTypeRef)other);
     switch (result) {
         case kCFCompareLessThan:
             return NSOrderedDescending;
@@ -418,14 +434,13 @@ static BOOL getSInt128Low64(CFNumberRef number, uint64_t *out)
     }
     else
     {
-        CFComparisonResult result = CFNumberCompare((CFNumberRef)self, (CFNumberRef)other, NULL);
-
-        switch (result) {
-            case kCFCompareLessThan:
+        // CFNumberCompare() does not accept a boolean, so use compare:.
+        switch ([self compare:other]) {
+            case NSOrderedAscending:
                 return NSOrderedDescending;
-            case kCFCompareGreaterThan:
+            case NSOrderedDescending:
                 return NSOrderedAscending;
-            case kCFCompareEqualTo:
+            case NSOrderedSame:
                 return NSOrderedSame;
         }
     }
