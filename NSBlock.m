@@ -18,6 +18,14 @@ static inline BOOL createBlockClass(const char *sup, const char *name, void *des
     {
         return NO;
     }
+    Class existing = objc_getClass(name);
+    if (existing != Nil)
+    {
+        // libsystem_blocks defines the Block classes (rooted at NSObject) in its 64-bit slices, so that Blocks can
+        // be retained and released without CoreFoundation. Make the NSBlock hierarchy their real parent.
+        class_setSuperclass(existing, cls);
+        return YES;
+    }
     Class meta = calloc(class_getInstanceSize(object_getClass(cls)), 1);
     if (meta == Nil)
     {
