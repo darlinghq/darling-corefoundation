@@ -868,14 +868,17 @@ SINGLETON_RR()
     CFMutableStringRef str = CFStringCreateMutable(kCFAllocatorDefault, 0);
     if ([sep isKindOfClass:objc_lookUpClass("NSString")])
     {
-        id last = [self lastObject];
+        // A separator goes between every pair of adjacent elements, also when an element is
+        // the same object as the last one (a repeated string literal, for example).
+        BOOL first = YES;
         for (id obj in self)
         {
-            CFStringAppend(str, (CFStringRef)[obj description]);
-            if (obj != last)
+            if (!first)
             {
                 CFStringAppend(str, (CFStringRef)sep);
             }
+            first = NO;
+            CFStringAppend(str, (CFStringRef)[obj description]);
         }
     }
     else
