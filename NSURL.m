@@ -147,8 +147,30 @@ NSString *const NSURLVolumeAvailableCapacityForImportantUsageKey = @"NSURLVolume
 NSString *const NSURLVolumeAvailableCapacityForOpportunisticUsageKey = @"NSURLVolumeAvailableCapacityForOpportunisticUsageKey";
 NSString *const NSURLVolumeIsEncryptedKey = @"NSURLVolumeIsEncryptedKey";
 NSString *const NSURLVolumeIsRootFileSystemKey = @"NSURLVolumeIsRootFileSystemKey";
+NSString *const NSURLIsPurgeableKey = @"NSURLIsPurgeableKey";
+NSString *const NSURLIsSparseKey = @"NSURLIsSparseKey";
+NSString *const NSURLMayHaveExtendedAttributesKey = @"NSURLMayHaveExtendedAttributesKey";
+NSString *const NSURLMayShareFileContentKey = @"NSURLMayShareFileContentKey";
+NSString *const NSURLDirectoryEntryCountKey = @"NSURLDirectoryEntryCountKey";
+NSString *const NSURLFileIdentifierKey = @"NSURLFileIdentifierKey";
+NSString *const NSURLFileContentIdentifierKey = @"NSURLFileContentIdentifierKey";
+NSString *const NSURLFileProtectionKey = @"NSURLFileProtectionKey";
+NSString *const NSURLThumbnailDictionaryKey = @"NSURLThumbnailDictionaryKey";
+NSString *const NSURLThumbnailKey = @"NSURLThumbnailKey";
+NSString *const NSURLVolumeTypeNameKey = @"NSURLVolumeTypeNameKey";
+NSString *const NSURLVolumeSubtypeKey = @"NSURLVolumeSubtypeKey";
+NSString *const NSURLVolumeMountFromLocationKey = @"NSURLVolumeMountFromLocationKey";
+NSString *const NSURLUbiquitousItemIsExcludedFromSyncKey = @"NSURLUbiquitousItemIsExcludedFromSyncKey";
+NSString *const NSURLUbiquitousItemIsSyncPausedKey = @"NSURLUbiquitousItemIsSyncPausedKey";
+NSString *const NSURLUbiquitousItemSupportedSyncControlsKey = @"NSURLUbiquitousItemSupportedSyncControlsKey";
 
 NSURLUbiquitousItemDownloadingStatus const NSURLUbiquitousItemDownloadingStatusNotDownloaded = @"NSURLUbiquitousItemDownloadingStatusNotDownloaded";
+NSURLUbiquitousItemDownloadingStatus const NSURLUbiquitousItemDownloadingStatusDownloaded = @"NSURLUbiquitousItemDownloadingStatusDownloaded";
+NSURLUbiquitousItemDownloadingStatus const NSURLUbiquitousItemDownloadingStatusCurrent = @"NSURLUbiquitousItemDownloadingStatusCurrent";
+NSURLUbiquitousSharedItemRole const NSURLUbiquitousSharedItemRoleOwner = @"NSURLUbiquitousSharedItemRoleOwner";
+NSURLUbiquitousSharedItemRole const NSURLUbiquitousSharedItemRoleParticipant = @"NSURLUbiquitousSharedItemRoleParticipant";
+NSURLUbiquitousSharedItemPermissions const NSURLUbiquitousSharedItemPermissionsReadOnly = @"NSURLUbiquitousSharedItemPermissionsReadOnly";
+NSURLUbiquitousSharedItemPermissions const NSURLUbiquitousSharedItemPermissionsReadWrite = @"NSURLUbiquitousSharedItemPermissionsReadWrite";
 
 // kCFErrorUnderlyingErrorKey values must be CFErrors: CFError's description reads them as such.
 static void posixError(CFErrorRef *error) {
