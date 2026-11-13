@@ -5495,6 +5495,8 @@ enum {
 };
 
 #if DEPLOYMENT_TARGET_MACOSX || DEPLOYMENT_TARGET_EMBEDDED || DEPLOYMENT_TARGET_WINDOWS
+CF_PRIVATE CFStringRef _CFNumberFormatterCreateStringWithUInt64(CFAllocatorRef allocator, CFNumberFormatterRef formatter, uint64_t number);
+
 /* Only come in here if spec->type is CFFormatLongType or CFFormatDoubleType. Pass in 0 for width or precision if not specified. Returns false if couldn't do the format (with the assumption the caller falls back to unlocalized).
 */
 static Boolean __CFStringFormatLocalizedNumber(CFMutableStringRef output, CFLocaleRef locale, const CFPrintValue *values, const CFFormatSpec *spec, SInt32 width, SInt32 precision, Boolean hasPrecision) {
@@ -5596,7 +5598,7 @@ static Boolean __CFStringFormatLocalizedNumber(CFMutableStringRef output, CFLoca
     Boolean isNegative = false;
     switch (values[spec->mainArgNum].type) {
         case CFFormatLongType:
-            if (values[spec->mainArgNum].value.int64Value < 0) isNegative = true;
+            if (spec->numericFormatStyle != CFFormatStyleUnsigned && values[spec->mainArgNum].value.int64Value < 0) isNegative = true;
             break;
         case CFFormatDoubleType:
 #if LONG_DOUBLE_SUPPORT
@@ -5662,8 +5664,17 @@ static Boolean __CFStringFormatLocalizedNumber(CFMutableStringRef output, CFLoca
     CFStringRef localizedNumberString = NULL;
     switch (spec->type) {
         case CFFormatLongType:
-            // ??? Need to do unsigned
-            localizedNumberString = CFNumberFormatterCreateStringWithValue(NULL, formatter, kCFNumberSInt64Type, &(values[spec->mainArgNum].value.int64Value));
+            if (spec->numericFormatStyle == CFFormatStyleUnsigned) {
+                // QUIRK: the value of an unsigned conversion narrower than 64 bits
+                // (%u, %hu, %hhu) has already been sign-extended to 64 bits when it
+                // is formatted, so 200 for %hhu prints as 2^64-56 and UINT32_MAX for
+                // %u as 2^64-1. Not documented. Evidence: black-box observation on
+                // macOS 26.7.3 (tier 2), see tests/string-format-unsigned-locale.c.
+                // Test: test_quirk_narrow_unsigned_sign_extended (same file).
+                localizedNumberString = _CFNumberFormatterCreateStringWithUInt64(NULL, formatter, (uint64_t)values[spec->mainArgNum].value.int64Value);
+            } else {
+                localizedNumberString = CFNumberFormatterCreateStringWithValue(NULL, formatter, kCFNumberSInt64Type, &(values[spec->mainArgNum].value.int64Value));
+            }
             break;
         case CFFormatDoubleType: {
 #if LONG_DOUBLE_SUPPORT

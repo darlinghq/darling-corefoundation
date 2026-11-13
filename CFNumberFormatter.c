@@ -520,6 +520,35 @@ CFStringRef CFNumberFormatterCreateStringWithValue(CFAllocatorRef allocator, CFN
     return string;
 }
 
+// Formats an unsigned 64-bit value with the formatter's settings;
+// CFNumberFormatterCreateStringWithValue only offers signed integer types.
+CF_PRIVATE CFStringRef _CFNumberFormatterCreateStringWithUInt64(CFAllocatorRef allocator, CFNumberFormatterRef formatter, uint64_t number) {
+    if (allocator == NULL) allocator = __CFGetDefaultAllocator();
+    __CFGenericValidateType(allocator, CFAllocatorGetTypeID());
+    __CFGenericValidateType(formatter, CFNumberFormatterGetTypeID());
+    GET_MULTIPLIER;
+    const void *valuePtr = &number;
+    UChar *ustr = NULL, ubuffer[BUFFER_SIZE + 1];
+    UErrorCode status = U_ZERO_ERROR;
+    CFIndex used, cnt = BUFFER_SIZE;
+    FORMAT_INT(uint64_t, _CFBigNumInitWithUInt64)
+    CFStringRef string = NULL;
+    if (U_SUCCESS(status)) {
+        UniChar *bufferToUse = ustr ? (UniChar *)ustr : (UniChar *)ubuffer;
+        if (formatter->_usesCharacterDirection && CFLocaleGetLanguageCharacterDirection(CFLocaleGetIdentifier(formatter->_locale)) == kCFLocaleLanguageDirectionRightToLeft) {
+            // Insert Unicode RTL marker
+            bufferToUse[0] = 0x200F;
+            used++;
+        } else {
+            // Move past direction marker
+            bufferToUse++;
+        }
+        string = CFStringCreateWithCharacters(allocator, bufferToUse, used);
+    }
+    if (ustr) CFAllocatorDeallocate(kCFAllocatorSystemDefault, ustr);
+    return string;
+}
+
 #undef FORMAT_FLT
 #undef FORMAT_INT
 #undef GET_MULTIPLIER
