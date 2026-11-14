@@ -2,7 +2,8 @@
 //
 // +[NSTimeZone localTimeZone] must work whether or not TZ is set in the
 // environment. Run once without arguments (TZ is unset by the test before the
-// first use) and once with the argument "tz" (TZ=Europe/Berlin).
+// first use) and once with the argument "tz" and TZ=Europe/Berlin already in the
+// environment of the process (env TZ=Europe/Berlin test tz).
 #import <Foundation/Foundation.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,9 +15,12 @@ static int failures;
 int main(int argc, char **argv)
 {
     int withTZ = argc > 1 && strcmp(argv[1], "tz") == 0;
-    if (withTZ)
-        setenv("TZ", "Europe/Berlin", 1);
-    else
+    if (withTZ) {
+        if (getenv("TZ") == NULL || strcmp(getenv("TZ"), "Europe/Berlin") != 0) {
+            printf("FAIL: run with TZ=Europe/Berlin in the environment\n");
+            return 2;
+        }
+    } else
         unsetenv("TZ");
 
     @autoreleasepool
