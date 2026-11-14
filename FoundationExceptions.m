@@ -24,6 +24,7 @@
 #include "ForFoundationOnly.h"
 #include "FoundationExceptions.h"
 #include <stdlib.h>
+#include <string.h>
 #include <dlfcn.h>
 #import <Foundation/NSObject.h>
 #import <Foundation/NSException.h>
@@ -35,25 +36,87 @@ typedef struct {
 	void* pointers[4];
 } LocalData_t;
 
+// QUIRK: a thrown object stays retained while it unwinds to its handler.
+// The 32-bit runtime has no hook that retains it, and an autorelease pool
+// drained by an @finally block that the exception passes through frees the
+// (autoreleased) object before the @catch runs. The 64-bit runtime retains the
+// object for the duration of the throw, so the same code works there; a
+// 32-bit macOS 10.14 build of the same pattern crashes (black-box observation,
+// tier 2), so this is deliberately more tolerant than the original.
+// The count is bounded: nothing reports the end of a @catch body, so the
+// oldest entries are released when the table is full.
+// Test: exception-survives-pool-drain (guest test, i386 and x86_64)
+enum { kHeldExceptionCapacity = 16 };
+
+typedef struct {
+	id exception;
+	size_t depth; // handler stack depth that catches it
+} HeldException_t;
+
 typedef struct ThreadChainLink
 {
 	void** localExceptionData;
 	size_t localExceptionDataCount, localExceptionDataSize;
+	HeldException_t held[kHeldExceptionCapacity];
+	size_t heldCount;
 } ThreadChainLink_t;
 
 static int objectIsKindOfNSException(id exc);
+
+static void releaseHeldException(id exc)
+{
+	if (exc != nil && class_respondsToSelector(object_getClass(exc), @selector(release)))
+		[exc release];
+}
+
+// Keeps `exc` alive while it propagates to the handler at `depth`, and lets go
+// of the exceptions whose catching frame is gone (they target a deeper handler
+// than the one now being unwound to).
+static void holdExceptionDuringUnwind(ThreadChainLink_t* chainLink, id exc, size_t depth)
+{
+	size_t kept = 0;
+	
+	if (exc != nil && class_respondsToSelector(object_getClass(exc), @selector(retain)))
+		[exc retain];
+	else
+		exc = nil;
+	
+	for (size_t i = 0; i < chainLink->heldCount; i++)
+	{
+		HeldException_t entry = chainLink->held[i];
+		if (entry.depth > depth)
+			releaseHeldException(entry.exception);
+		else
+			chainLink->held[kept++] = entry;
+	}
+	chainLink->heldCount = kept;
+	
+	if (exc == nil)
+		return;
+	
+	if (chainLink->heldCount == kHeldExceptionCapacity)
+	{
+		releaseHeldException(chainLink->held[0].exception);
+		memmove(&chainLink->held[0], &chainLink->held[1], sizeof(HeldException_t) * (kHeldExceptionCapacity - 1));
+		chainLink->heldCount--;
+	}
+	chainLink->held[chainLink->heldCount].exception = exc;
+	chainLink->held[chainLink->heldCount].depth = depth;
+	chainLink->heldCount++;
+}
 
 // Throw handler with Foundation support
 static void __raiseError(id exc)
 {
 	ThreadChainLink_t* chainLink = (ThreadChainLink_t*) _CFGetTSD(__CFTSDKeyExceptionData);
-	if (chainLink != NULL)
+	if (chainLink != NULL && chainLink->localExceptionDataCount > 0)
 	{
 		LocalData_t* led = (LocalData_t*) chainLink->localExceptionData[chainLink->localExceptionDataCount - 1];
 		
 		if (led != NULL)
 		{
 			chainLink->localExceptionDataCount--;
+			holdExceptionDuringUnwind(chainLink, exc, chainLink->localExceptionDataCount);
 			led->pointers[0] = exc;
 			_longjmp(led->buf, 1);
 		}
@@ -102,6 +165,8 @@ static int objectIsKindOfNSException(id exc)
 static void __exceptionFinalize(void* ptr)
 {
 	ThreadChainLink_t* tsd = (ThreadChainLink_t*) ptr;
+	for (size_t i = 0; i < tsd->heldCount; i++)
+		releaseHeldException(tsd->held[i].exception);
 	free(tsd->localExceptionData);
 	free(tsd);
 }
