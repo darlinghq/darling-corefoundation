@@ -115,13 +115,13 @@ NSNotificationName const NSSystemTimeZoneDidChangeNotification = @"kCFTimeZoneSy
 
 + (NSTimeZone *)localTimeZone
 {
+    // The local time zone is the system zone as first seen by the process and,
+    // unlike +systemTimeZone, does not follow later changes. It must not read
+    // TZ directly: the variable is normally unset.
     static NSTimeZone *localTZ = nil;
     static dispatch_once_t once = 0L;
     dispatch_once(&once, ^{
-        CFStringRef zoneName = CFStringCreateWithCString(kCFAllocatorDefault, getenv("TZ"), kCFStringEncodingUTF8);
-        localTZ = (NSTimeZone *)CFTimeZoneCreateWithName(NULL, zoneName, false);
-        [localTZ retain];
-        CFRelease(zoneName);
+        localTZ = (NSTimeZone *)CFTimeZoneCopySystem();
     });
     return localTZ;
 }
