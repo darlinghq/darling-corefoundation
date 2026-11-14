@@ -172,6 +172,38 @@ NSURLUbiquitousSharedItemRole const NSURLUbiquitousSharedItemRoleParticipant = @
 NSURLUbiquitousSharedItemPermissions const NSURLUbiquitousSharedItemPermissionsReadOnly = @"NSURLUbiquitousSharedItemPermissionsReadOnly";
 NSURLUbiquitousSharedItemPermissions const NSURLUbiquitousSharedItemPermissionsReadWrite = @"NSURLUbiquitousSharedItemPermissionsReadWrite";
 
+// Reports why an item cannot be reached the way the file reading errors of the Cocoa domain do:
+// no such file, no permission, and any other failure as an unknown read error.
+static void cocoaReadError(CFErrorRef *error, int posixCode)
+{
+    if (error == NULL)
+    {
+        return;
+    }
+
+    CFIndex code = 256; // NSFileReadUnknownError
+    if (posixCode == ENOENT || posixCode == ENOTDIR)
+    {
+        code = 260; // NSFileReadNoSuchFileError
+    }
+    else if (posixCode == EACCES || posixCode == EPERM)
+    {
+        code = 257; // NSFileReadNoPermissionError
+    }
+
+    CFErrorRef underlying = CFErrorCreate(kCFAllocatorDefault, kCFErrorDomainPOSIX, posixCode, NULL);
+    const CFStringRef keys[1] = { kCFErrorUnderlyingErrorKey };
+    CFTypeRef values[1] = { underlying };
+    *error = CFErrorCreateWithUserInfoKeysAndValues(kCFAllocatorDefault, kCFErrorDomainCocoa, code, (const void *const *)keys, (const void *const *)values, 1);
+    CFRelease(underlying);
+}
+
+// A failed read of an item's resource values is reported as the Cocoa file-reading error
+// (NSFileReadNoSuchFileError for a missing item) with the POSIX error underneath.
+static void resourceReadError(CFErrorRef *error) {
+    cocoaReadError(error, errno);
+}
+
 // kCFErrorUnderlyingErrorKey values must be CFErrors: CFError's description reads them as such.
 static void posixError(CFErrorRef *error) {
     int saved_errno = errno;
@@ -258,7 +290,7 @@ static CFStringRef CFURLCreateTypeIdentifier(CFURLRef url, CFErrorRef *error)
     struct stat info;
     if (!CFURLStat(url, &info))
     {
-        posixError(error);
+        resourceReadError(error);
         return NULL;
     }
 
@@ -294,6 +326,37 @@ static CFStringRef CFURLCreateTypeIdentifier(CFURLRef url, CFErrorRef *error)
 
     if (extension != NULL)
         CFRelease(extension); // CFURLCopyPathExtension returns NULL for paths without an extension
+    return result;
+}
+
+// NSURLContentTypeKey: the UTType object for the item's uniform type identifier. UTType belongs to
+// UniformTypeIdentifiers, a framework above Foundation, so it is reached through the Objective-C
+// runtime once an identifier exists; a process without the framework reads the key as nil.
+static CFTypeRef CFURLCreateContentType(CFURLRef url, CFErrorRef *error)
+{
+    CFStringRef identifier = CFURLCreateTypeIdentifier(url, error);
+    if (identifier == NULL)
+        return NULL;
+
+    static dispatch_once_t once;
+    static Class typeClass;
+    dispatch_once(&once, ^{
+        typeClass = objc_getClass("UTType");
+        if (typeClass == Nil)
+        {
+            dlopen("/System/Library/Frameworks/UniformTypeIdentifiers.framework/UniformTypeIdentifiers", RTLD_LAZY | RTLD_LOCAL);
+            typeClass = objc_getClass("UTType");
+        }
+    });
+
+    CFTypeRef result = NULL;
+    if (typeClass != Nil)
+    {
+        id type = [typeClass typeWithIdentifier:(NSString *)identifier];
+        if (type != nil)
+            result = CFRetain(type);
+    }
+    CFRelease(identifier);
     return result;
 }
 
@@ -404,7 +467,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
         }
         else
         {
-            posixError(error);
+            resourceReadError(error);
         }
     }
     else if (CFEqual(key, kCFURLIsDirectoryKey))
@@ -416,7 +479,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
         }
         else
         {
-            posixError(error);
+            resourceReadError(error);
         }
     }
     else if (CFEqual(key, kCFURLIsSymbolicLinkKey))
@@ -428,7 +491,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
         }
         else
         {
-            posixError(error);
+            resourceReadError(error);
         }
     }
     else if (CFEqual(key, kCFURLIsVolumeKey))
@@ -448,7 +511,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
         }
         else
         {
-            posixError(error);
+            resourceReadError(error);
         }
     }
     else if (CFEqual(key, kCFURLIsUserImmutableKey))
@@ -460,7 +523,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
         }
         else
         {
-            posixError(error);
+            resourceReadError(error);
         }
     }
     else if (CFEqual(key, kCFURLIsHiddenKey))
@@ -488,7 +551,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
         }
         else
         {
-            posixError(error);
+            resourceReadError(error);
         }
     }
     else if (CFEqual(key, kCFURLCreationDateKey))
@@ -500,7 +563,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
         }
         else
         {
-            posixError(error);
+            resourceReadError(error);
         }
     }
     else if (CFEqual(key, kCFURLContentAccessDateKey))
@@ -511,7 +574,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
         }
         else
         {
-            posixError(error);
+            resourceReadError(error);
         }
     }
     else if (CFEqual(key, kCFURLContentModificationDateKey))
@@ -522,7 +585,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
         }
         else
         {
-            posixError(error);
+            resourceReadError(error);
         }
     }
     else if (CFEqual(key, kCFURLAttributeModificationDateKey))
@@ -533,7 +596,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
         }
         else
         {
-            posixError(error);
+            resourceReadError(error);
         }
     }
     else if (CFEqual(key, kCFURLLinkCountKey))
@@ -545,7 +608,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
         }
         else
         {
-            posixError(error);
+            resourceReadError(error);
         }
     }
     else if (CFEqual(key, kCFURLParentDirectoryURLKey))
@@ -561,6 +624,10 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
     {
         // Key for the resource’s uniform type identifier (UTI), returned as a CFString object.
         value = CFURLCreateTypeIdentifier(url, error);
+    }
+    else if (CFEqual(key, CFSTR("NSURLContentTypeKey")))
+    {
+        value = CFURLCreateContentType(url, error);
     }
     else if (CFEqual(key, kCFURLLocalizedTypeDescriptionKey))
     {
@@ -608,7 +675,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
         }
         else
         {
-            posixError(error);
+            resourceReadError(error);
         }
     }
     else if (CFEqual(key, kCFURLPreferredIOBlockSizeKey))
@@ -620,7 +687,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
         }
         else
         {
-            posixError(error);
+            resourceReadError(error);
         }
     }
     else if (CFEqual(key, kCFURLIsReadableKey))
@@ -632,7 +699,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
         }
         else
         {
-            posixError(error);
+            resourceReadError(error);
         }
     }
     else if (CFEqual(key, kCFURLIsWritableKey))
@@ -644,7 +711,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
         }
         else
         {
-            posixError(error);
+            resourceReadError(error);
         }
     }
     else if (CFEqual(key, kCFURLIsExecutableKey))
@@ -656,7 +723,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
         }
         else
         {
-            posixError(error);
+            resourceReadError(error);
         }
     }
     else if (CFEqual(key, kCFURLFileSecurityKey))
@@ -672,7 +739,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
         }
         else
         {
-            posixError(error);
+            resourceReadError(error);
         }
     }
     else if (CFEqual(key, kCFURLIsExcludedFromBackupKey))
@@ -1383,32 +1450,6 @@ CFDataRef CFURLCreateBookmarkData(CFAllocatorRef allocator, CFURLRef url, CFURLB
     CFDataRef data = CFDataCreate(allocator, (const UInt8 *)buf, strlen(buf));
     free(buf);
     return data;
-}
-
-// Reports why an item cannot be reached the way the file reading errors of the Cocoa domain do:
-// no such file, no permission, and any other failure as an unknown read error.
-static void cocoaReadError(CFErrorRef *error, int posixCode)
-{
-    if (error == NULL)
-    {
-        return;
-    }
-
-    CFIndex code = 256; // NSFileReadUnknownError
-    if (posixCode == ENOENT || posixCode == ENOTDIR)
-    {
-        code = 260; // NSFileReadNoSuchFileError
-    }
-    else if (posixCode == EACCES || posixCode == EPERM)
-    {
-        code = 257; // NSFileReadNoPermissionError
-    }
-
-    CFErrorRef underlying = CFErrorCreate(kCFAllocatorDefault, kCFErrorDomainPOSIX, posixCode, NULL);
-    const CFStringRef keys[1] = { kCFErrorUnderlyingErrorKey };
-    CFTypeRef values[1] = { underlying };
-    *error = CFErrorCreateWithUserInfoKeysAndValues(kCFAllocatorDefault, kCFErrorDomainCocoa, code, (const void *const *)keys, (const void *const *)values, 1);
-    CFRelease(underlying);
 }
 
 Boolean CFURLResourceIsReachable(CFURLRef url, CFErrorRef *error)
