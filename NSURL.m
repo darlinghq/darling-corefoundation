@@ -147,8 +147,30 @@ NSString *const NSURLVolumeAvailableCapacityForImportantUsageKey = @"NSURLVolume
 NSString *const NSURLVolumeAvailableCapacityForOpportunisticUsageKey = @"NSURLVolumeAvailableCapacityForOpportunisticUsageKey";
 NSString *const NSURLVolumeIsEncryptedKey = @"NSURLVolumeIsEncryptedKey";
 NSString *const NSURLVolumeIsRootFileSystemKey = @"NSURLVolumeIsRootFileSystemKey";
+NSString *const NSURLIsPurgeableKey = @"NSURLIsPurgeableKey";
+NSString *const NSURLIsSparseKey = @"NSURLIsSparseKey";
+NSString *const NSURLMayHaveExtendedAttributesKey = @"NSURLMayHaveExtendedAttributesKey";
+NSString *const NSURLMayShareFileContentKey = @"NSURLMayShareFileContentKey";
+NSString *const NSURLDirectoryEntryCountKey = @"NSURLDirectoryEntryCountKey";
+NSString *const NSURLFileIdentifierKey = @"NSURLFileIdentifierKey";
+NSString *const NSURLFileContentIdentifierKey = @"NSURLFileContentIdentifierKey";
+NSString *const NSURLFileProtectionKey = @"NSURLFileProtectionKey";
+NSString *const NSURLThumbnailDictionaryKey = @"NSURLThumbnailDictionaryKey";
+NSString *const NSURLThumbnailKey = @"NSURLThumbnailKey";
+NSString *const NSURLVolumeTypeNameKey = @"NSURLVolumeTypeNameKey";
+NSString *const NSURLVolumeSubtypeKey = @"NSURLVolumeSubtypeKey";
+NSString *const NSURLVolumeMountFromLocationKey = @"NSURLVolumeMountFromLocationKey";
+NSString *const NSURLUbiquitousItemIsExcludedFromSyncKey = @"NSURLUbiquitousItemIsExcludedFromSyncKey";
+NSString *const NSURLUbiquitousItemIsSyncPausedKey = @"NSURLUbiquitousItemIsSyncPausedKey";
+NSString *const NSURLUbiquitousItemSupportedSyncControlsKey = @"NSURLUbiquitousItemSupportedSyncControlsKey";
 
 NSURLUbiquitousItemDownloadingStatus const NSURLUbiquitousItemDownloadingStatusNotDownloaded = @"NSURLUbiquitousItemDownloadingStatusNotDownloaded";
+NSURLUbiquitousItemDownloadingStatus const NSURLUbiquitousItemDownloadingStatusDownloaded = @"NSURLUbiquitousItemDownloadingStatusDownloaded";
+NSURLUbiquitousItemDownloadingStatus const NSURLUbiquitousItemDownloadingStatusCurrent = @"NSURLUbiquitousItemDownloadingStatusCurrent";
+NSURLUbiquitousSharedItemRole const NSURLUbiquitousSharedItemRoleOwner = @"NSURLUbiquitousSharedItemRoleOwner";
+NSURLUbiquitousSharedItemRole const NSURLUbiquitousSharedItemRoleParticipant = @"NSURLUbiquitousSharedItemRoleParticipant";
+NSURLUbiquitousSharedItemPermissions const NSURLUbiquitousSharedItemPermissionsReadOnly = @"NSURLUbiquitousSharedItemPermissionsReadOnly";
+NSURLUbiquitousSharedItemPermissions const NSURLUbiquitousSharedItemPermissionsReadWrite = @"NSURLUbiquitousSharedItemPermissionsReadWrite";
 
 // kCFErrorUnderlyingErrorKey values must be CFErrors: CFError's description reads them as such.
 static void posixError(CFErrorRef *error) {
@@ -813,6 +835,81 @@ static inline void CFURLResourceInfoRelease(CFMutableDictionaryRef info)
     pthread_mutex_unlock(&resInfoLock);
 }
 
+// Temporary resource values belong to the URL object and are consulted only for keys that the
+// system does not provide, so they never shadow a computed value. They live in a nested
+// dictionary of the resource cache so that clearing the cache clears them too.
+static const CFStringRef CFURLTemporaryValuesKey = CFSTR("_NSURLTemporaryResourceValues");
+
+static CFTypeRef CFURLCopyTemporaryValue(CFMutableDictionaryRef info, CFStringRef key)
+{
+    CFTypeRef value = NULL;
+
+    pthread_mutex_lock(&resInfoLock);
+    CFMutableDictionaryRef temporary = (CFMutableDictionaryRef)CFDictionaryGetValue(info, CFURLTemporaryValuesKey);
+    if (temporary != NULL)
+    {
+        value = CFDictionaryGetValue(temporary, key);
+        if (value != NULL)
+        {
+            CFRetain(value);
+        }
+    }
+    pthread_mutex_unlock(&resInfoLock);
+    return value;
+}
+
+// QUIRK: temporary resource values are kept only for file URLs; reading a key set on another
+// kind of URL reports success with no value. Not documented. Evidence: black-box observation
+// on Mac OS X 10.14.4 and macOS 26.7.3 (tier 2), vd-upstream MC-NSURL-V430A.
+// Test: nsurl-temporary-resource-values (non-file URL case).
+static void CFURLSetTemporaryResourceValue(CFURLRef url, CFStringRef key, CFTypeRef value)
+{
+    // Observed on the same systems: a nil value leaves an earlier value in place.
+    if (value == NULL || !_CFURLIsFileURL(url))
+    {
+        return;
+    }
+
+    CFMutableDictionaryRef info = CFURLResourceInfo(url);
+
+    pthread_mutex_lock(&resInfoLock);
+    CFMutableDictionaryRef temporary = (CFMutableDictionaryRef)CFDictionaryGetValue(info, CFURLTemporaryValuesKey);
+    if (temporary == NULL)
+    {
+        temporary = CFDictionaryCreateMutable(kCFAllocatorDefault, 0, &kCFCopyStringDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        CFDictionarySetValue(info, CFURLTemporaryValuesKey, temporary);
+        CFRelease(temporary);
+    }
+    CFDictionarySetValue(temporary, key, value);
+    CFRelease(info);
+    pthread_mutex_unlock(&resInfoLock);
+}
+
+static void CFURLRemoveCachedResourceValue(CFURLRef url, CFStringRef key)
+{
+    CFMutableDictionaryRef info = CFURLResourceInfo(url);
+
+    pthread_mutex_lock(&resInfoLock);
+    CFDictionaryRemoveValue(info, key);
+    CFMutableDictionaryRef temporary = (CFMutableDictionaryRef)CFDictionaryGetValue(info, CFURLTemporaryValuesKey);
+    if (temporary != NULL)
+    {
+        CFDictionaryRemoveValue(temporary, key);
+    }
+    CFRelease(info);
+    pthread_mutex_unlock(&resInfoLock);
+}
+
+static void CFURLRemoveAllCachedResourceValues(CFURLRef url)
+{
+    CFMutableDictionaryRef info = CFURLResourceInfo(url);
+
+    pthread_mutex_lock(&resInfoLock);
+    CFDictionaryRemoveAllValues(info);
+    CFRelease(info);
+    pthread_mutex_unlock(&resInfoLock);
+}
+
 Boolean CFURLCopyResourcePropertyForKey(CFURLRef url, CFStringRef key, void *propertyValueTypeRefPtr, CFErrorRef *error)
 {
     if (propertyValueTypeRefPtr != NULL)
@@ -827,30 +924,58 @@ Boolean CFURLCopyResourcePropertyForKey(CFURLRef url, CFStringRef key, void *pro
 
     CFMutableDictionaryRef resourceInfo = CFURLResourceInfo(url);
     CFTypeRef value = (CFTypeRef)CFDictionaryGetValue(resourceInfo, key);
+    Boolean fromTemporary = false;
+    Boolean failed = false;
 
     if (value == NULL)
     {
-        value = CFURLCreatePropertyForKey(url, key, error);
+        CFErrorRef propertyError = NULL;
+        value = CFURLCreatePropertyForKey(url, key, &propertyError);
+        if (value == NULL && propertyError == NULL)
+        {
+            value = CFURLCopyTemporaryValue(resourceInfo, key);
+            fromTemporary = value != NULL;
+        }
+        if (value == NULL && propertyError != NULL)
+        {
+            failed = true;
+            if (error != NULL)
+            {
+                *error = propertyError;
+            }
+            else
+            {
+                CFRelease(propertyError);
+            }
+        }
     }
     else
     {
         value = CFRetain(value);
     }
-    
+
     if (propertyValueTypeRefPtr != NULL)
     {
         *(CFTypeRef *)propertyValueTypeRefPtr = value;
     }
-    
-    CFURLResourceInfoUpdateRelease(resourceInfo, key, value);
+
+    if (fromTemporary)
+    {
+        CFURLResourceInfoRelease(resourceInfo);
+    }
+    else
+    {
+        CFURLResourceInfoUpdateRelease(resourceInfo, key, value);
+    }
 
     if (value != NULL)
     {
         CFRelease(value);
-        return true;
     }
 
-    return false;
+    // A key that has no value and no error (not set, or not applicable to the item) is a
+    // successful read of nil, as the documentation of getResourceValue:forKey:error: describes.
+    return !failed;
 }
 
 CFDictionaryRef CFURLCopyResourcePropertiesForKeys(CFURLRef url, CFArrayRef keys, CFErrorRef *error)
@@ -888,11 +1013,17 @@ CFDictionaryRef CFURLCopyResourcePropertiesForKeys(CFURLRef url, CFArrayRef keys
     {
         CFStringRef key = CFArrayGetValueAtIndex(keys, idx);
         CFTypeRef value = (CFTypeRef)CFDictionaryGetValue(resourceInfo, key);
+        Boolean fromTemporary = false;
 
         if (value == NULL)
         {
             CFErrorRef propertyError = NULL;
             value = CFURLCreatePropertyForKey(url, key, &propertyError);
+            if (value == NULL && propertyError == NULL)
+            {
+                value = CFURLCopyTemporaryValue(resourceInfo, key);
+                fromTemporary = value != NULL;
+            }
             if (value == NULL && propertyError != NULL)
             {
                 // Like macOS, fail the whole request (e.g. a missing file) instead of leaving the key out.
@@ -913,7 +1044,10 @@ CFDictionaryRef CFURLCopyResourcePropertiesForKeys(CFURLRef url, CFArrayRef keys
             value = CFRetain(value);
         }
 
-        CFURLResourceInfoUpdate(resourceInfo, key, value);
+        if (!fromTemporary)
+        {
+            CFURLResourceInfoUpdate(resourceInfo, key, value);
+        }
 
         if (value != NULL)
         {
@@ -1251,8 +1385,36 @@ CFDataRef CFURLCreateBookmarkData(CFAllocatorRef allocator, CFURLRef url, CFURLB
     return data;
 }
 
+// Reports why an item cannot be reached the way the file reading errors of the Cocoa domain do:
+// no such file, no permission, and any other failure as an unknown read error.
+static void cocoaReadError(CFErrorRef *error, int posixCode)
+{
+    if (error == NULL)
+    {
+        return;
+    }
+
+    CFIndex code = 256; // NSFileReadUnknownError
+    if (posixCode == ENOENT || posixCode == ENOTDIR)
+    {
+        code = 260; // NSFileReadNoSuchFileError
+    }
+    else if (posixCode == EACCES || posixCode == EPERM)
+    {
+        code = 257; // NSFileReadNoPermissionError
+    }
+
+    CFErrorRef underlying = CFErrorCreate(kCFAllocatorDefault, kCFErrorDomainPOSIX, posixCode, NULL);
+    const CFStringRef keys[1] = { kCFErrorUnderlyingErrorKey };
+    CFTypeRef values[1] = { underlying };
+    *error = CFErrorCreateWithUserInfoKeysAndValues(kCFAllocatorDefault, kCFErrorDomainCocoa, code, (const void *const *)keys, (const void *const *)values, 1);
+    CFRelease(underlying);
+}
+
 Boolean CFURLResourceIsReachable(CFURLRef url, CFErrorRef *error)
 {
+    if (error != NULL)
+        *error = NULL;
     if (url == NULL)
         return false;
     CFStringRef path = CFURLCopyFileSystemPath(url, kCFURLPOSIXPathStyle);
@@ -1263,10 +1425,16 @@ Boolean CFURLResourceIsReachable(CFURLRef url, CFErrorRef *error)
     CFRelease(path);
     if (!ok)
         return false;
-    return access(cpath, F_OK) == 0;
+    if (access(cpath, F_OK) == 0)
+        return true;
+    cocoaReadError(error, errno);
+    return false;
 }
 
 @implementation NSURL
+
+@dynamic dataRepresentation; // implemented in Foundation's NSURL category, built on CFURLCreateData
+
 
 + (NSData *)bookmarkDataWithContentsOfURL:(NSURL *)bookmarkFileURL error:(NSError **)error
 {
@@ -1286,6 +1454,65 @@ Boolean CFURLResourceIsReachable(CFURLRef url, CFErrorRef *error)
 + (id)URLByResolvingBookmarkData:(NSData *)bookmarkData options:(NSURLBookmarkResolutionOptions)options relativeToURL:(NSURL *)relativeURL bookmarkDataIsStale:(BOOL *)isStale error:(NSError **)error
 {
     return [[[self alloc] initByResolvingBookmarkData:bookmarkData options:options relativeToURL:relativeURL bookmarkDataIsStale:isStale error:error] autorelease];
+}
+
+// QUIRK: an item that is not an alias file resolves to the URL given, without an error (also a
+// directory, a missing item and a non-file URL), and a symbolic link resolves to its target.
+// The documentation only describes resolving real alias files. Evidence: black-box observation
+// on Mac OS X 10.14.4 and macOS 26.7.3 (tier 2), vd-upstream MC-NSURL-V430A. Alias files made
+// by writeBookmarkData:toURL:options:error: are not supported here, so the quirk is the whole
+// behaviour. Test: nsurl-alias-file-resolution.
++ (id)URLByResolvingAliasFileAtURL:(NSURL *)url options:(NSURLBookmarkResolutionOptions)options error:(NSError **)error
+{
+    if (error != NULL)
+    {
+        *error = nil;
+    }
+    if (url == nil)
+    {
+        return nil;
+    }
+
+    UInt8 path[PATH_MAX] = { 0 };
+    char target[PATH_MAX];
+    struct stat info;
+    if (![url isFileURL] || !CFURLGetFileSystemRepresentation((CFURLRef)url, true, path, PATH_MAX) || lstat((const char *)path, &info) != 0 || !S_ISLNK(info.st_mode))
+    {
+        return url;
+    }
+
+    ssize_t length = readlink((const char *)path, target, sizeof(target) - 1);
+    if (length <= 0)
+    {
+        return url;
+    }
+    target[length] = 0;
+
+    // A relative target is relative to the directory that holds the link.
+    char joined[PATH_MAX];
+    if (target[0] == '/')
+    {
+        if (strlcpy(joined, target, sizeof(joined)) >= sizeof(joined))
+        {
+            return url;
+        }
+    }
+    else
+    {
+        char *slash = strrchr((const char *)path, '/');
+        size_t directoryLength = slash != NULL ? (size_t)(slash - (char *)path) + 1 : 0;
+        if (directoryLength + strlen(target) >= sizeof(joined))
+        {
+            return url;
+        }
+        memcpy(joined, path, directoryLength);
+        strlcpy(joined + directoryLength, target, sizeof(joined) - directoryLength);
+    }
+
+    struct stat targetInfo;
+    Boolean isDirectory = stat(joined, &targetInfo) == 0 && S_ISDIR(targetInfo.st_mode);
+    CFURLRef resolved = CFURLCreateFromFileSystemRepresentation(kCFAllocatorDefault, (const UInt8 *)joined, strlen(joined), isDirectory);
+    return [(NSURL *)resolved autorelease];
 }
 
 + (BOOL)supportsSecureCoding
@@ -1385,6 +1612,37 @@ Boolean CFURLResourceIsReachable(CFURLRef url, CFErrorRef *error)
 - (BOOL)setResourceValues:(NSDictionary *)keyedValues error:(NSError **)error
 {
     return CFURLSetResourcePropertiesForKeys([self _cfurl], (CFDictionaryRef)keyedValues, (CFErrorRef *)error);
+}
+
+- (void)removeCachedResourceValueForKey:(NSURLResourceKey)key
+{
+    CFURLRemoveCachedResourceValue([self _cfurl], (CFStringRef)key);
+}
+
+- (void)removeAllCachedResourceValues
+{
+    CFURLRemoveAllCachedResourceValues([self _cfurl]);
+}
+
+- (void)setTemporaryResourceValue:(id)value forKey:(NSURLResourceKey)key
+{
+    CFURLSetTemporaryResourceValue([self _cfurl], (CFStringRef)key, (CFTypeRef)value);
+}
+
+// A promised item is one whose content a file provider may still have to deliver; here every
+// item is present or absent, so reachability and the resource values are those of the item.
+- (BOOL)checkPromisedItemIsReachableAndReturnError:(NSError **)error
+{
+    return CFURLResourceIsReachable([self _cfurl], (CFErrorRef *)error);
+}
+
+- (NSDictionary *)promisedItemResourceValuesForKeys:(NSArray *)keys error:(NSError **)error
+{
+    if (![self checkPromisedItemIsReachableAndReturnError:error])
+    {
+        return nil;
+    }
+    return [self resourceValuesForKeys:keys error:error];
 }
 
 @end
