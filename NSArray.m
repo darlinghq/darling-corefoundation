@@ -1756,7 +1756,7 @@ SINGLETON_RR()
 + (instancetype)arrayWithContentsOfURL:(NSURL *)url error:(NSError**)error
 {
     NSArray* tmp = [self arrayWithContentsOfURL:url];
-    if (tmp == nil) {
+    if (tmp == nil && error != NULL) {
         *error = [NSError errorWithDomain:@"NSArrayErrorDomain" code:-1 userInfo:nil];
     }
     return tmp;

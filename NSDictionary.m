@@ -542,7 +542,7 @@ SINGLETON_RR()
     // TODO: we should actually pass along any error we get to the user so they have more info
     // this is just a quick and dirty implementation
     NSDictionary* tmp = [self dictionaryWithContentsOfURL:url];
-    if (tmp == nil) {
+    if (tmp == nil && error != NULL) {
         *error = [NSError errorWithDomain:@"NSDictionaryErrorDomain" code:-1 userInfo:nil];
     }
     return tmp;
@@ -765,7 +765,7 @@ SINGLETON_RR()
 - (id)initWithContentsOfURL:(NSURL *)url error:(NSError **)error
 {
     NSDictionary* tmp = [self initWithContentsOfURL:url];
-    if (tmp == nil) {
+    if (tmp == nil && error != NULL) {
         *error = [NSError errorWithDomain:@"NSDictionaryErrorDomain" code:-1 userInfo:nil];
     }
     return tmp;
