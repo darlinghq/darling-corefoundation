@@ -180,8 +180,12 @@ Boolean CFStringTransform(CFMutableStringRef string, CFRange *range, CFStringRef
     int32_t start = 0;
     int32_t limit = CFStringGetLength(string);
     if (range != NULL) {
-        range->location = kCFNotFound;
-        range->length = 0;
+        // the range is optional: when given it selects the part of the string to transform
+        if (range->location < 0 || range->length < 0 || range->location > limit || range->length > limit - range->location) {
+            return false;
+        }
+        start = (int32_t)range->location;
+        limit = (int32_t)(range->location + range->length);
     }
     do {
         // technically this data could potentially be cached, if it is used often, we should consider doing so, until then this should work
@@ -193,13 +197,21 @@ Boolean CFStringTransform(CFMutableStringRef string, CFRange *range, CFStringRef
         if (U_FAILURE(err)) {
             break;
         }
-        utrans_close(trans);
         success = true;
     } while (0);
 
-    if (success) {
-        range->location = start;
-        range->length = limit - start;
+    if (trans != NULL) {
+        utrans_close(trans);
+    }
+
+    if (range != NULL) {
+        if (success) {
+            range->location = start;
+            range->length = limit - start;
+        } else {
+            range->location = kCFNotFound;
+            range->length = 0;
+        }
     }
 
     return success;
