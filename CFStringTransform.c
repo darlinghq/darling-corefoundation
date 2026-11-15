@@ -89,6 +89,20 @@ static void _CFStringTransformCopy(UReplaceable *rep, int32_t start, int32_t lim
 static inline UTransliterator *utrans_find(CFStringRef transform, UTransDirection dir, UErrorCode *error) {
     UEnumeration *uenum = NULL;
     UTransliterator *trans = NULL;
+    if (dir == UTRANS_FORWARD && (CFEqual(transform, kCFStringTransformStripDiacritics) || CFEqual(transform, kCFStringTransformToUnicodeName))) {
+        // ICU's "Accents-Any" converts to/from ASCII accent notation; removing diacritics is
+        // decomposition, dropping the nonspacing marks and recomposing. ICU's "Any-Name" names
+        // every character; the CoreFoundation transform only names the non-ASCII ones.
+        static const UChar stripRules[] = u"NFD; [:Nonspacing Mark:] Remove; NFC";
+        static const UChar nameRules[] = u"[:^ASCII:] Any-Name";
+        const UChar *rules = CFEqual(transform, kCFStringTransformStripDiacritics) ? stripRules : nameRules;
+        trans = utrans_openU(rules, -1, UTRANS_FORWARD, NULL, 0, NULL, error);
+        if (U_SUCCESS(*error)) {
+            return trans;
+        }
+        *error = U_ZERO_ERROR;
+        trans = NULL;
+    }
     do {
         uenum = utrans_openIDs(error);
         if (U_FAILURE(*error)) {
@@ -129,8 +143,7 @@ static inline UTransliterator *utrans_find(CFStringRef transform, UTransDirectio
                 (CFEqual(name, CFSTR("Latin-Cyrillic")) && CFEqual(transform, kCFStringTransformLatinCyrillic)) ||
                 (CFEqual(name, CFSTR("Latin-Greek")) && CFEqual(transform, kCFStringTransformLatinGreek)) ||
                 (CFEqual(name, CFSTR("Any-Hex/XML")) && CFEqual(transform, kCFStringTransformToXMLHex)) ||
-                (CFEqual(name, CFSTR("Any-Name")) && CFEqual(transform, kCFStringTransformToUnicodeName)) ||
-                (CFEqual(name, CFSTR("Accents-Any")) && CFEqual(transform, kCFStringTransformStripDiacritics))) {
+                (CFEqual(name, CFSTR("Any-Name")) && CFEqual(transform, kCFStringTransformToUnicodeName))) {
                 trans = utrans_openU(uid, idLen, dir, NULL, 0, NULL, error);
             }
             CFRelease(name);
