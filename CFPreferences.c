@@ -206,13 +206,10 @@ static CFURLRef _preferencesDirectoryForUserHostSafetyLevel(CFStringRef userName
     //    if (hostName != kCFPreferencesCurrentHost && hostName != kCFPreferencesAnyHost) return NULL; // Arbitrary host access not permitted
     if (userName == kCFPreferencesAnyUser) {
         if (!home) home = CFURLCreateWithFileSystemPath(alloc, CFSTR("/Library/Preferences/"), kCFURLPOSIXPathStyle, true);
+        // The system-wide directory serves both host selectors: there is no
+        // per-host variant of the any-user domains.
         levels = 1;
-        if (hostName == kCFPreferencesCurrentHost) url = home;
-        else {
-            url = CFURLCreateWithFileSystemPathRelativeToBase(alloc, CFSTR("Network/"), kCFURLPOSIXPathStyle, true, home);
-            levels ++;
-            CFRelease(home);
-        }
+        url = home;
     } else {
         home = CFCopyHomeDirectoryURLForUser((userName == kCFPreferencesCurrentUser) ? NULL : userName);
         if (home) {
@@ -529,6 +526,9 @@ CFPreferencesDomainRef _CFPreferencesStandardDomain(CFStringRef  domainName, CFS
     CFPreferencesDomainRef domain;
     CFStringRef  domainKey;
     Boolean shouldReleaseDomain = true;
+    // The any-user domains live in /Library/Preferences whichever host is
+    // named, so both selectors must reach the same cached domain.
+    if (userName == kCFPreferencesAnyUser) hostName = kCFPreferencesAnyHost;
      domainKey = _CFPreferencesStandardDomainCacheKey(domainName, userName, hostName);
     __CFLock(&domainCacheLock);
     if (!domainCache) {
@@ -605,6 +605,7 @@ CFArrayRef  _CFPreferencesCreateDomainList(CFStringRef  userName, CFStringRef  h
     SInt32 idx, cnt;
     CFStringRef  suffix;
     UInt32 suffixLen;
+    if (userName == kCFPreferencesAnyUser) hostName = kCFPreferencesAnyHost;
     CFURLRef prefDir = _preferencesDirectoryForUserHost(userName, hostName);
     
     if (!prefDir) {
