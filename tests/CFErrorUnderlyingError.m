@@ -21,11 +21,11 @@ static BOOL contains(CFStringRef haystack, CFStringRef needle)
 }
 
 // The type checks run before describing the error, so a pre-fix build reports FAIL before it crashes.
-static void check_posix_error(const char *label, CFErrorRef error, CFIndex expectedErrno)
+static void check_error_with_underlying(const char *label, CFErrorRef error, CFStringRef domain, CFIndex code, CFIndex expectedErrno)
 {
     char text[256];
-    snprintf(text, sizeof(text), "%s: error is POSIX with the errno", label);
-    check_result(text, error != NULL && CFEqual(CFErrorGetDomain(error), kCFErrorDomainPOSIX) && CFErrorGetCode(error) == expectedErrno);
+    snprintf(text, sizeof(text), "%s: error has the expected domain and code", label);
+    check_result(text, error != NULL && CFEqual(CFErrorGetDomain(error), domain) && CFErrorGetCode(error) == code);
     if (error == NULL)
         return;
 
@@ -47,13 +47,19 @@ static void check_posix_error(const char *label, CFErrorRef error, CFIndex expec
         CFRelease(userInfo);
 }
 
+static void check_posix_error(const char *label, CFErrorRef error, CFIndex expectedErrno)
+{
+    check_error_with_underlying(label, error, kCFErrorDomainPOSIX, expectedErrno, expectedErrno);
+}
+
 static void check_url_resource_error(NSString *base)
 {
     NSURL *missing = [NSURL fileURLWithPath:[base stringByAppendingPathComponent:@"missing"]];
     NSError *error = nil;
     NSDictionary *values = [missing resourceValuesForKeys:@[NSURLIsRegularFileKey] error:&error];
     check_result("NSURL missing file returns nil", values == nil);
-    check_posix_error("NSURL missing file", (CFErrorRef)error, ENOENT);
+    // NSFileReadNoSuchFileError (260) with the POSIX error underneath.
+    check_error_with_underlying("NSURL missing file", (CFErrorRef)error, kCFErrorDomainCocoa, 260, ENOENT);
 }
 
 static void check_enumerator_error(NSString *base)
