@@ -723,6 +723,47 @@ void __InitTZStrings(void) {
 }
 #endif
 
+#if !DEPLOYMENT_TARGET_WINDOWS
+// Follows the symbolic link at "link", and the links it leads to, until a target
+// has a "zoneinfo" directory component, and returns the part of that target below
+// its last such component (the zone's name) in "name". Returns false when the
+// chain ends, or is longer than a few links, without reaching one.
+static Boolean __CFTimeZoneNameFromLinkChain(const char *link, char *name, size_t nameSize) {
+    static const char marker[] = "/zoneinfo/";
+    char current[CFMaxPathSize], target[CFMaxPathSize];
+
+    if (strlen(link) >= sizeof(current)) return false;
+    strcpy(current, link);
+    for (int hops = 0; hops < 8; hops++) {
+	ssize_t length = readlink(current, target, sizeof(target) - 1);
+	if (length <= 0) return false;
+	target[length] = '\0';
+
+	const char *found = NULL, *at = target;
+	while ((at = strstr(at, marker)) != NULL) {
+	    found = at + sizeof(marker) - 1;
+	    at = found;
+	}
+	if (found != NULL && *found != '\0') {
+	    if (strlen(found) >= nameSize) return false;
+	    strcpy(name, found);
+	    return true;
+	}
+
+	if (target[0] == '/') {
+	    strcpy(current, target);
+	} else {
+	    // A relative target is relative to the directory of the link
+	    char *slash = strrchr(current, '/');
+	    size_t directory = slash != NULL ? (size_t)(slash - current + 1) : 0;
+	    if (directory + strlen(target) >= sizeof(current)) return false;
+	    strcpy(current + directory, target);
+	}
+    }
+    return false;
+}
+#endif
+
 static CFTimeZoneRef __CFTimeZoneCreateSystem(void) {
     CFTimeZoneRef result = NULL;
     
@@ -772,7 +813,15 @@ static CFTimeZoneRef __CFTimeZoneCreateSystem(void) {
 	if (strncmp(linkbuf, TZZONEINFO, sizeof(TZZONEINFO) - 1) == 0) {
 	    name = CFStringCreateWithBytes(kCFAllocatorSystemDefault, (uint8_t *)linkbuf + sizeof(TZZONEINFO) - 1, strlen(linkbuf) - sizeof(TZZONEINFO) + 1, kCFStringEncodingUTF8, false);
 	} else {
-	    name = CFStringCreateWithBytes(kCFAllocatorSystemDefault, (uint8_t *)linkbuf, strlen(linkbuf), kCFStringEncodingUTF8, false);
+	    // The link can lead through other links (a prefix whose /etc/localtime goes
+	    // through a mount of the host's) before it reaches a zoneinfo directory;
+	    // the zone is named by the path below that directory.
+	    char zone[CFMaxPathSize];
+	    if (__CFTimeZoneNameFromLinkChain(TZZONELINK, zone, sizeof(zone))) {
+		name = CFStringCreateWithBytes(kCFAllocatorSystemDefault, (uint8_t *)zone, strlen(zone), kCFStringEncodingUTF8, false);
+	    } else {
+		name = CFStringCreateWithBytes(kCFAllocatorSystemDefault, (uint8_t *)linkbuf, strlen(linkbuf), kCFStringEncodingUTF8, false);
+	    }
 	}
 #endif
 
