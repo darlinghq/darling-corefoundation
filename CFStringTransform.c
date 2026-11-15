@@ -89,6 +89,20 @@ static void _CFStringTransformCopy(UReplaceable *rep, int32_t start, int32_t lim
 static inline UTransliterator *utrans_find(CFStringRef transform, UTransDirection dir, UErrorCode *error) {
     UEnumeration *uenum = NULL;
     UTransliterator *trans = NULL;
+    if (dir == UTRANS_FORWARD && (CFEqual(transform, kCFStringTransformStripDiacritics) || CFEqual(transform, kCFStringTransformToUnicodeName))) {
+        // ICU's "Accents-Any" converts to/from ASCII accent notation; removing diacritics is
+        // decomposition, dropping the nonspacing marks and recomposing. ICU's "Any-Name" names
+        // every character; the CoreFoundation transform only names the non-ASCII ones.
+        static const UChar stripRules[] = u"NFD; [:Nonspacing Mark:] Remove; NFC";
+        static const UChar nameRules[] = u"[:^ASCII:] Any-Name";
+        const UChar *rules = CFEqual(transform, kCFStringTransformStripDiacritics) ? stripRules : nameRules;
+        trans = utrans_openU(rules, -1, UTRANS_FORWARD, NULL, 0, NULL, error);
+        if (U_SUCCESS(*error)) {
+            return trans;
+        }
+        *error = U_ZERO_ERROR;
+        trans = NULL;
+    }
     do {
         uenum = utrans_openIDs(error);
         if (U_FAILURE(*error)) {
@@ -129,8 +143,7 @@ static inline UTransliterator *utrans_find(CFStringRef transform, UTransDirectio
                 (CFEqual(name, CFSTR("Latin-Cyrillic")) && CFEqual(transform, kCFStringTransformLatinCyrillic)) ||
                 (CFEqual(name, CFSTR("Latin-Greek")) && CFEqual(transform, kCFStringTransformLatinGreek)) ||
                 (CFEqual(name, CFSTR("Any-Hex/XML")) && CFEqual(transform, kCFStringTransformToXMLHex)) ||
-                (CFEqual(name, CFSTR("Any-Name")) && CFEqual(transform, kCFStringTransformToUnicodeName)) ||
-                (CFEqual(name, CFSTR("Accents-Any")) && CFEqual(transform, kCFStringTransformStripDiacritics))) {
+                (CFEqual(name, CFSTR("Any-Name")) && CFEqual(transform, kCFStringTransformToUnicodeName))) {
                 trans = utrans_openU(uid, idLen, dir, NULL, 0, NULL, error);
             }
             CFRelease(name);
@@ -180,8 +193,12 @@ Boolean CFStringTransform(CFMutableStringRef string, CFRange *range, CFStringRef
     int32_t start = 0;
     int32_t limit = CFStringGetLength(string);
     if (range != NULL) {
-        range->location = kCFNotFound;
-        range->length = 0;
+        // the range is optional: when given it selects the part of the string to transform
+        if (range->location < 0 || range->length < 0 || range->location > limit || range->length > limit - range->location) {
+            return false;
+        }
+        start = (int32_t)range->location;
+        limit = (int32_t)(range->location + range->length);
     }
     do {
         // technically this data could potentially be cached, if it is used often, we should consider doing so, until then this should work
@@ -193,13 +210,21 @@ Boolean CFStringTransform(CFMutableStringRef string, CFRange *range, CFStringRef
         if (U_FAILURE(err)) {
             break;
         }
-        utrans_close(trans);
         success = true;
     } while (0);
 
-    if (success) {
-        range->location = start;
-        range->length = limit - start;
+    if (trans != NULL) {
+        utrans_close(trans);
+    }
+
+    if (range != NULL) {
+        if (success) {
+            range->location = start;
+            range->length = limit - start;
+        } else {
+            range->location = kCFNotFound;
+            range->length = 0;
+        }
     }
 
     return success;
