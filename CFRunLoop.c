@@ -2386,7 +2386,12 @@ static int32_t __CFRunLoopRun(CFRunLoopRef rl, CFRunLoopModeRef rlm, CFTimeInter
         timeout_context->termTSR = UINT64_MAX;
     }
 
-    Boolean didDispatchPortLastTime = true;
+    // Darling: poll the main queue's port before the first wait of every run,
+    // not only before the second pass. A caller that runs the mode with a zero
+    // timeout over and over (every run is one pass) otherwise never reaches
+    // the poll, and the main queue depends on the port set's receive order
+    // alone while timers or sources are always ready.
+    Boolean didDispatchPortLastTime = false;
     int32_t retVal = 0;
     do {
 #if DEPLOYMENT_TARGET_MACOSX || DEPLOYMENT_TARGET_EMBEDDED || DEPLOYMENT_TARGET_EMBEDDED_MINI
