@@ -50,6 +50,7 @@ enum {
 	CFPB_OP_SET,
 	CFPB_OP_SET_LOCATION,
 	CFPB_OP_GET_LOCATION,
+	CFPB_OP_SUBSCRIBE,
 	CFPB_OP_LAST
 };
 
@@ -60,10 +61,11 @@ enum {
 #define CFPB_KEY_ITEM "item"       // uint64
 #define CFPB_KEY_FLAVOR "flavor"   // string
 #define CFPB_KEY_DATA "data"       // data; absent for a promise or empty data
-#define CFPB_KEY_FLAGS "flags"     // uint64
-#define CFPB_KEY_PROMISED "promised"   // bool
+#define CFPB_KEY_FLAGS "flags"     // uint64 (FLAVOR_INFO reply: as reported, with the Promised bit only for visible promises)
+#define CFPB_KEY_PROMISED "promised"   // bool (SET: a promise; FLAVOR_INFO reply: the flavor is promised, visible or not)
 #define CFPB_KEY_RESOLVE "resolve" // bool: DATA asks the promise owner for the data
 #define CFPB_KEY_LOCATION "location"   // string (URL)
+#define CFPB_KEY_HOST "host"       // bool: the change comes from the host clipboard (BEGIN, ADD_ITEM, SET)
 // reply keys
 #define CFPB_KEY_STATUS "status"   // int64
 #define CFPB_KEY_COUNT "count"     // uint64: change count
@@ -78,6 +80,7 @@ enum {
 // messages the service sends to a client
 #define CFPB_OP_PUSH_RESOLVE 100   // name, count not needed: item, flavor; the client answers with status
 #define CFPB_OP_PUSH_OWNER_LOST 101
+#define CFPB_OP_PUSH_CHANGED 102   // name, count, host: a board the client subscribed to changed
 
 typedef struct {
 	// Asks the owner of a generation to supply a promised flavor. Calls done(status) once, from any thread. NULL when
@@ -85,6 +88,11 @@ typedef struct {
 	void (^askOwner)(CFPBClient owner, CFStringRef name, CFPasteboardItemID item, CFStringRef flavor, void (^done)(CFPasteboardStatus status));
 	// Tells a client its generation of a board ended. May be NULL.
 	void (^ownerLost)(CFPBClient previousOwner, CFStringRef name);
+	// A client wants to hear about changes of a board (a host bridge).
+	void (^subscribe)(CFPBClient client, CFStringRef name);
+	// A board changed by origin (a new generation, an added item or flavor); host: the change imports the host clipboard.
+	// Tells the subscribers other than origin.
+	void (^changed)(CFPBClient origin, CFStringRef name, uint64_t count, bool host);
 } CFPBServiceHooks;
 
 // Answers one request on behalf of client. complete is called exactly once, possibly after the function returned, with

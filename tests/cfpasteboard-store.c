@@ -164,20 +164,25 @@ static void testPromises(void) {
 	CHECK(CFPasteboardAddItem(pb, &item) == kCFPasteboardSuccess);
 	CFDataRef plain = bytes("plain");
 	CHECK(CFPasteboardSetData(pb, item, kHTML, plain, 0) == kCFPasteboardSuccess);
-	CHECK(CFPasteboardPromiseData(pb, item, kText, kCFPasteboardFlavorNoFlags, &provider, "lazy text") == kCFPasteboardSuccess);
+	// a promise made visible reads as flagged Promised (the Pasteboard Manager's), one made without it reads as made
+	// (NSPasteboard's); both are promised as far as CFPasteboardIsDataPromised goes
+	CHECK(CFPasteboardPromiseData(pb, item, kText, kCFPasteboardFlavorPromiseVisible, &provider, "lazy text") == kCFPasteboardSuccess);
 	CHECK(CFPasteboardPromiseData(pb, item, kPNG, kCFPasteboardFlavorSenderOnly, &provider, "lazy text") == kCFPasteboardSuccess);
 	CHECK(CFPasteboardPromiseData(pb, item, kText, 0, NULL, NULL) == kCFPasteboardNoProvider);
 
 	CHECK(provided == 0 && released == 0);
 	CHECK(CFPasteboardIsDataPromised(pb, item, kText) && !CFPasteboardIsDataPromised(pb, item, kHTML));
 	CFPasteboardFlavorFlags flags = 0;
-	CHECK(CFPasteboardGetDataFlags(pb, item, kPNG, &flags) == kCFPasteboardSuccess && flags == (kCFPasteboardFlavorPromised | kCFPasteboardFlavorSenderOnly));
+	CHECK(CFPasteboardGetDataFlags(pb, item, kPNG, &flags) == kCFPasteboardSuccess && flags == kCFPasteboardFlavorSenderOnly);
+	CHECK(CFPasteboardGetDataFlags(pb, item, kText, &flags) == kCFPasteboardSuccess && flags == kCFPasteboardFlavorPromised);
+	CHECK(CFPasteboardIsDataPromised(pb, item, kPNG));
 
 	CFDataRef data = NULL;
 	CHECK(CFPasteboardCopyData(pb, item, kText, &data) == kCFPasteboardSuccess && dataEquals(data, "lazy text"));
 	CFRelease(data);
 	CHECK(provided == 1 && allProvided == 0);   // the png promise is still open
 	CHECK(!CFPasteboardIsDataPromised(pb, item, kText));
+	CHECK(CFPasteboardGetDataFlags(pb, item, kText, &flags) == kCFPasteboardSuccess && flags == 0);
 	CHECK(CFPasteboardCopyData(pb, item, kText, &data) == kCFPasteboardSuccess);   // not asked again
 	CFRelease(data);
 	CHECK(provided == 1);
@@ -404,7 +409,84 @@ static void testMalformed(xpc_endpoint_t endpoint) {
 	xpc_release(peer);
 }
 
-static void testBridge(void) {
+// ---- the bridge with the service as the single store ----
+
+static int pushes, hostPushes;
+static void waitForAbove(int *counter, int value) {
+	for (int i = 0; i < 300 && *counter <= value; i++) usleep(10000);
+}
+
+// A windowless client (a raw peer) and the bridged client share the general board through the service. The fake
+// bridge here is notified of the peer's changes, a host import reaches the peer marked as such, and the peer reads a
+// lazily imported flavor through the bridge's provider.
+static void testBridgeThroughService(xpc_endpoint_t endpoint, CFPasteboardRef general, CFArrayRef items) {
+	CFStringRef name = CFSTR("Apple CFPasteboard general");
+	xpc_connection_t peer = xpc_connection_create_from_endpoint(endpoint);
+	xpc_connection_set_event_handler(peer, ^(xpc_object_t event) {
+		if (xpc_get_type(event) == XPC_TYPE_DICTIONARY && xpc_dictionary_get_int64(event, CFPB_KEY_OP) == CFPB_OP_PUSH_CHANGED) {
+			pushes++;
+			if (xpc_dictionary_get_bool(event, CFPB_KEY_HOST)) hostPushes++;
+		}
+	});
+	xpc_connection_resume(peer);
+	CHECK(simple(peer, request(CFPB_OP_SUBSCRIBE, name)) == 0);
+
+	// a host import is announced to other subscribers as an import
+	int before = pushes, hostBefore = hostPushes;
+	CFIndex count = CFPasteboardHostBridgeReplaceContents(kCFPasteboardGeneral, items);
+	CHECK(count != 0);
+	waitForAbove(&pushes, before);
+	CHECK(pushes > before && hostPushes > hostBefore && hostPushes - hostBefore == pushes - before);
+
+	// the peer (windowless: no bridge) writes the general board; the bridge hears of it, and the peer is not told of its own change
+	before = pushes;
+	int notified = changed;
+	xpc_object_t reply = call(peer, request(CFPB_OP_BEGIN, name));
+	CHECK(statusOf(reply) == 0);
+	xpc_release(reply);
+	reply = call(peer, request(CFPB_OP_ADD_ITEM, name));
+	CHECK(statusOf(reply) == 0);
+	uint64_t id = xpc_dictionary_get_uint64(reply, CFPB_KEY_ITEM);
+	xpc_release(reply);
+	xpc_object_t r = request(CFPB_OP_SET, name);
+	xpc_dictionary_set_uint64(r, CFPB_KEY_ITEM, id);
+	xpc_dictionary_set_string(r, CFPB_KEY_FLAVOR, "public.utf8-plain-text");
+	xpc_dictionary_set_uint64(r, CFPB_KEY_FLAGS, 0);
+	xpc_dictionary_set_data(r, CFPB_KEY_DATA, "windowless", 10);
+	CHECK(simple(peer, r) == 0);
+	waitForAbove(&changed, notified + 2);
+	CHECK(changed >= notified + 3);   // new generation, item, flavor
+	CHECK(pushes == before);
+	CFDataRef data = NULL;
+	CFIndex n = 0;
+	CFPasteboardItemID item = 0;
+	CHECK(CFPasteboardGetItemCount(general, &n) == kCFPasteboardSuccess && n == 1);
+	CHECK(CFPasteboardGetItemAtIndex(general, 0, &item) == kCFPasteboardSuccess && item == id);
+	CHECK(CFPasteboardCopyData(general, item, kText, &data) == kCFPasteboardSuccess && dataEquals(data, "windowless"));
+	CFRelease(data);
+
+	// the bridge imports from the host again; the peer reads the lazy flavor and the bridge's provider supplies it
+	CHECK(CFPasteboardHostBridgeReplaceContents(kCFPasteboardGeneral, items) != 0);
+	int asked = lazyAsked;
+	r = request(CFPB_OP_DATA, name);
+	xpc_dictionary_set_uint64(r, CFPB_KEY_ITEM, 2);
+	xpc_dictionary_set_string(r, CFPB_KEY_FLAVOR, "public.png");
+	xpc_dictionary_set_bool(r, CFPB_KEY_RESOLVE, true);
+	reply = call(peer, r);
+	size_t length = 0;
+	const char *got = statusOf(reply) == 0 && xpc_dictionary_get_value(reply, CFPB_KEY_DATA) ? xpc_dictionary_get_data(reply, CFPB_KEY_DATA, &length) : NULL;
+	CHECK(got != NULL && length == 13 && memcmp(got, "png-from-host", 13) == 0 && lazyAsked == asked + 1);
+	xpc_release(reply);
+	// the bridge's own import is not reported to the bridge
+	int settled = changed;
+	usleep(100000);
+	CHECK(changed == settled);
+
+	xpc_connection_cancel(peer);
+	xpc_release(peer);
+}
+
+static void testBridge(xpc_endpoint_t endpoint) {
 	CFPasteboardHostBridgeCallbacks bridge = { 0, bridgeChanged, bridgeCopyData, NULL };
 	CHECK(CFPasteboardRegisterHostBridge(&bridge));
 	CHECK(!CFPasteboardRegisterHostBridge(&bridge));
@@ -453,6 +535,7 @@ static void testBridge(void) {
 	CFRelease(data);
 	// the process may not write into what the host put there without starting a generation
 	CHECK(CFPasteboardHostBridgeReplaceContents(kCFPasteboardFind, items) == 0);
+	if (endpoint != NULL) testBridgeThroughService(endpoint, general, items);
 	CFRelease(items); CFRelease(first); CFRelease(secondItem);
 	CFRelease(general); CFRelease(find);
 }
@@ -472,7 +555,7 @@ int main(int argc, char **argv) {
 		testPeers(endpoint);
 		testMalformed(endpoint);
 	}
-	testBridge();
+	testBridge(endpoint);
 	if (failures == 0) printf("PASS\n");
 	return failures ? 1 : 0;
 }

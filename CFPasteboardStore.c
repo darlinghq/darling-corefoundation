@@ -29,6 +29,7 @@ typedef struct {
 	CFDataRef data;      // NULL while promised
 	uint32_t flags;
 	Boolean promised;
+	Boolean visible;     // a promise that reads as flagged Promised
 } CFPBFlavor;
 
 typedef struct {
@@ -285,7 +286,7 @@ CFPasteboardStatus _CFPBStoreCopyFlavors(CFPBStore *store, CFStringRef name, CFP
 	return status;
 }
 
-CFPasteboardStatus _CFPBStoreGetFlavor(CFPBStore *store, CFStringRef name, CFPasteboardItemID item, CFStringRef flavor, uint32_t *flags, CFDataRef *data) {
+CFPasteboardStatus _CFPBStoreGetFlavor(CFPBStore *store, CFStringRef name, CFPasteboardItemID item, CFStringRef flavor, uint32_t *flags, Boolean *promised, CFDataRef *data) {
 	if (!nameIsValid(name) || !flavorIsValid(flavor)) return kCFPasteboardInvalid;
 	STORE_LOCK(store);
 	CFPBBoard *board = boardFind(store, name);
@@ -295,7 +296,8 @@ CFPasteboardStatus _CFPBStoreGetFlavor(CFPBStore *store, CFStringRef name, CFPas
 		CFPBFlavor *entry = flavorFind(found, flavor);
 		status = kCFPasteboardBadFlavor;
 		if (entry != NULL) {
-			if (flags) *flags = entry->flags | (entry->promised ? kCFPasteboardFlavorPromised : 0);
+			if (flags) *flags = entry->flags | (entry->promised && entry->visible ? kCFPasteboardFlavorPromised : 0);
+			if (promised) *promised = entry->promised;
 			if (data) *data = entry->data ? CFRetain(entry->data) : NULL;
 			status = kCFPasteboardSuccess;
 		}
@@ -321,7 +323,8 @@ CFPasteboardStatus _CFPBStoreSetFlavor(CFPBStore *store, CFStringRef name, CFPBC
 	if (promised && data != NULL) return kCFPasteboardInvalid;
 	uint64_t length = data ? (uint64_t)CFDataGetLength(data) : 0;
 	if (length > CFPB_MAX_FLAVOR_DATA) return kCFPasteboardTooLarge;
-	flags &= ~(uint32_t)kCFPasteboardFlavorPromised;
+	Boolean visible = (flags & kCFPasteboardFlavorPromiseVisible) != 0;
+	flags &= ~((uint32_t)kCFPasteboardFlavorPromised | kCFPasteboardFlavorPromiseVisible);
 
 	STORE_LOCK(store);
 	CFPBBoard *board = boardFind(store, name);
@@ -357,6 +360,7 @@ CFPasteboardStatus _CFPBStoreSetFlavor(CFPBStore *store, CFStringRef name, CFPBC
 			entry->data = data ? CFDataCreateCopy(kCFAllocatorSystemDefault, data) : (promised ? NULL : CFDataCreate(kCFAllocatorSystemDefault, NULL, 0));
 			entry->flags = flags;
 			entry->promised = promised;
+			entry->visible = promised && visible;
 			status = kCFPasteboardSuccess;
 		}
 		if (hadPromisesLeft) *hadPromisesLeft = promisesLeftLocked(board) > 0;

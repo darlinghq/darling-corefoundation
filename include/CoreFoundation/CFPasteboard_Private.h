@@ -27,12 +27,9 @@ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
  * every time its contents are replaced (CFPasteboardBeginGeneration). The process that began the current
  * generation owns it and is the only one that may add items and flavors to it, until the next generation begins.
  *
- * Where a board lives. A process-wide choice made when a CFPasteboardRef is created:
- *  - a board that a host bridge handles (see below) lives in the process and the bridge mirrors it to the host;
- *  - any other board lives in the user's pboard service (Mach service com.apple.pasteboard.1), which keeps the data
- *    for all of the user's processes;
- *  - if the service cannot be reached the board lives in the process.
- * The behaviour is the same in all three cases.
+ * Where a board lives. Every board lives in the user's pboard service (Mach service com.apple.pasteboard.1), which
+ * keeps the data for all of the user's processes; only if no service answers (when the first pasteboard is created)
+ * do the boards live in the process. The behaviour is the same in both cases.
  *
  * Threading. All functions may be called from any thread. Promise callbacks run on an unspecified thread, without
  * any internal lock held, and may call back into this interface for the same pasteboard.
@@ -78,7 +75,12 @@ typedef CF_OPTIONS(uint32_t, CFPasteboardFlavorFlags) {
 	kCFPasteboardFlavorNotSaved = (1 << 2),
 	kCFPasteboardFlavorRequestOnly = (1 << 3),
 	kCFPasteboardFlavorSystemTranslated = (1 << 8),
-	kCFPasteboardFlavorPromised = (1 << 9)
+	kCFPasteboardFlavorPromised = (1 << 9),
+	/* Only for CFPasteboardPromiseData: the promise reads as flagged kCFPasteboardFlavorPromised through
+	 * CFPasteboardGetDataFlags. The Pasteboard Manager's promises do (macOS reports them so); promises made the way
+	 * NSPasteboard makes them (declared types with an owner) read as unflagged, so NSPasteboard must not pass it.
+	 * CFPasteboardIsDataPromised is true for every unresolved promise either way. */
+	kCFPasteboardFlavorPromiseVisible = (1u << 30)
 };
 
 /* The names of the standard boards. Other names (including the font and ruler boards of NSPasteboard) are boards of
@@ -156,13 +158,18 @@ CF_EXPORT CFPasteboardStatus CFPasteboardSetPasteLocation(CFPasteboardRef pasteb
 CF_EXPORT CFPasteboardStatus CFPasteboardCopyPasteLocation(CFPasteboardRef pasteboard, CFURLRef *location);
 
 /* Host bridge. A GUI backend that has access to the host's clipboard registers once, early, before the process
- * first creates the general or the drag board; those two boards then live in the process and the bridge mirrors
- * them. Boards that already exist keep where they live. */
+ * first creates the general or the drag board. The boards stay in the service; the bridge keeps them in step with the
+ * host: it is told (boardChanged) when anyone changed the board, from this process or, through the service, from
+ * another one, and it imports a host change with CFPasteboardHostBridgeReplaceContents. A change that was an import
+ * from the host (by this or another bridging process) is not reported to bridges, so nothing is exported back to the
+ * host and several bridging processes do not echo one another. Pasteboards that existed before the registration are
+ * not bridged. */
 typedef struct {
 	CFIndex version;   /* 0 */
-	/* A bridged board was changed by this process (a generation began, or items or flavors were added). The bridge
-	 * reads the board through this interface; it should do its work later or on another thread rather than inside
-	 * the call, since more additions may follow. */
+	/* A bridged board was changed by anyone but a host import: a generation began, or items or flavors were added.
+	 * Called on the changing thread for this process's own changes, on an internal queue for another process's. The
+	 * bridge reads the board through this interface; it should do its work later or on another thread rather than
+	 * inside the call, since more additions may follow. */
 	void (*boardChanged)(CFStringRef name, CFPasteboardRef pasteboard, void *info);
 	/* Supplies a flavor that CFPasteboardHostBridgeReplaceContents listed without data (a lazily transferred
 	 * host selection). Returns a retained CFData, or NULL. itemIndex is 0-based. */
@@ -175,7 +182,8 @@ CF_EXPORT Boolean CFPasteboardRegisterHostBridge(const CFPasteboardHostBridgeCal
 
 /* The host's clipboard changed: replaces the contents of the bridged board by the given items. items is an array of
  * dictionaries mapping a flavor type (CFString) to its data (CFData), or to kCFNull when the data is to be fetched
- * with copyData on demand. Begins a new generation. Returns the change count, or 0 on failure. */
+ * with copyData on demand (the service asks this process when any process reads the flavor). Begins a new generation
+ * owned by this process, marked as a host import. Returns the change count, or 0 on failure. */
 CF_EXPORT CFIndex CFPasteboardHostBridgeReplaceContents(CFStringRef name, CFArrayRef items);
 
 /* Entry point of the pboard service: serves the user's boards on the Mach service and does not return. */

@@ -56,9 +56,10 @@ CF_PRIVATE CFPasteboardStatus _CFPBStoreGetInfo(CFPBStore *store, CFStringRef na
 CF_PRIVATE CFPasteboardStatus _CFPBStoreItemAt(CFPBStore *store, CFStringRef name, CFIndex index, CFPasteboardItemID *item);
 CF_PRIVATE CFPasteboardStatus _CFPBStoreAddItem(CFPBStore *store, CFStringRef name, CFPBClient client, CFPasteboardItemID *item);
 CF_PRIVATE CFPasteboardStatus _CFPBStoreCopyFlavors(CFPBStore *store, CFStringRef name, CFPasteboardItemID item, CFArrayRef *flavors);
-// *data is retained and NULL while the flavor is promised
+// *data is retained and NULL while the flavor is promised. *flags carries the Promised bit only for a promise made
+// visible (kCFPasteboardFlavorPromiseVisible); *promised is set for every promise.
 CF_PRIVATE CFPasteboardStatus _CFPBStoreGetFlavor(CFPBStore *store, CFStringRef name, CFPasteboardItemID item, CFStringRef flavor,
-	uint32_t *flags, CFDataRef *data);
+	uint32_t *flags, Boolean *promised, CFDataRef *data);
 // data NULL with promised false is empty data; with promised true it is a promise
 CF_PRIVATE CFPasteboardStatus _CFPBStoreSetFlavor(CFPBStore *store, CFStringRef name, CFPBClient client, CFPasteboardItemID item, CFStringRef flavor,
 	CFDataRef data, uint32_t flags, Boolean promised, uint64_t *changeCount, Boolean *hadPromisesLeft);

@@ -26,6 +26,8 @@ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "CFPasteboardProtocol.h"
 #include <CoreFoundation/CFString.h>
+#include <CoreFoundation/CFSet.h>
+#include <CoreFoundation/CFDictionary.h>
 #include <CoreFoundation/CFURL.h>
 #include <CoreFoundation/CFNumber.h>
 #include <Block.h>
@@ -87,7 +89,7 @@ static void replyData(CFPBStore *store, CFPBClient client, CFStringRef name, CFP
 		bool resolve, const CFPBServiceHooks *hooks, void (^complete)(xpc_object_t reply)) {
 	uint32_t flags = 0;
 	CFDataRef data = NULL;
-	CFPasteboardStatus status = _CFPBStoreGetFlavor(store, name, item, flavor, &flags, &data);
+	CFPasteboardStatus status = _CFPBStoreGetFlavor(store, name, item, flavor, &flags, NULL, &data);
 	if (status != kCFPasteboardSuccess) {
 		complete(statusReply(status));
 		return;
@@ -119,7 +121,7 @@ static void replyData(CFPBStore *store, CFPBClient client, CFStringRef name, CFP
 	CFRetain(flavor);
 	hooks->askOwner(owner, name, item, flavor, ^(CFPasteboardStatus askStatus) {
 		CFDataRef resolved = NULL;
-		CFPasteboardStatus got = _CFPBStoreGetFlavor(store, name, item, flavor, NULL, &resolved);
+		CFPasteboardStatus got = _CFPBStoreGetFlavor(store, name, item, flavor, NULL, NULL, &resolved);
 		if (got == kCFPasteboardSuccess && resolved != NULL) {
 			xpc_object_t reply = statusReply(kCFPasteboardSuccess);
 			xpc_dictionary_set_data(reply, CFPB_KEY_DATA, CFDataGetBytePtr(resolved), (size_t)CFDataGetLength(resolved));
@@ -189,6 +191,7 @@ void _CFPBServiceHandle(CFPBStore *store, CFPBClient client, xpc_object_t reques
 				xpc_dictionary_set_uint64(reply, CFPB_KEY_COUNT, count);
 				xpc_dictionary_set_bool(reply, CFPB_KEY_PREVIOUS_SELF, previous == client);
 				if (previous != NULL && previous != client && hooks != NULL && hooks->ownerLost != NULL) hooks->ownerLost(previous, name);
+				if (hooks != NULL && hooks->changed != NULL) hooks->changed(client, name, count, getBool(request, CFPB_KEY_HOST));
 			}
 			break;
 		}
@@ -221,7 +224,13 @@ void _CFPBServiceHandle(CFPBStore *store, CFPBClient client, xpc_object_t reques
 			CFPasteboardItemID id = 0;
 			status = _CFPBStoreAddItem(store, name, client, &id);
 			reply = statusReply(status);
-			if (status == kCFPasteboardSuccess) xpc_dictionary_set_uint64(reply, CFPB_KEY_ITEM, id);
+			if (status == kCFPasteboardSuccess) {
+				xpc_dictionary_set_uint64(reply, CFPB_KEY_ITEM, id);
+				uint64_t count = 0;
+				if (hooks != NULL && hooks->changed != NULL && _CFPBStoreGetInfo(store, name, &count, NULL, NULL) == kCFPasteboardSuccess) {
+					hooks->changed(client, name, count, getBool(request, CFPB_KEY_HOST));
+				}
+			}
 			break;
 		}
 		case CFPB_OP_FLAVORS: {
@@ -245,9 +254,13 @@ void _CFPBServiceHandle(CFPBStore *store, CFPBClient client, xpc_object_t reques
 			uint32_t flags = 0;
 			flavor = copyStringArg(request, CFPB_KEY_FLAVOR, CFPB_MAX_FLAVOR_BYTES);
 			if (flavor == NULL || !getUInt(request, CFPB_KEY_ITEM, &item)) break;
-			status = _CFPBStoreGetFlavor(store, name, item, flavor, &flags, NULL);
+			Boolean promised = false;
+			status = _CFPBStoreGetFlavor(store, name, item, flavor, &flags, &promised, NULL);
 			reply = statusReply(status);
-			if (status == kCFPasteboardSuccess) xpc_dictionary_set_uint64(reply, CFPB_KEY_FLAGS, flags);
+			if (status == kCFPasteboardSuccess) {
+				xpc_dictionary_set_uint64(reply, CFPB_KEY_FLAGS, flags);
+				xpc_dictionary_set_bool(reply, CFPB_KEY_PROMISED, promised);
+			}
 			break;
 		}
 		case CFPB_OP_DATA:
@@ -269,8 +282,14 @@ void _CFPBServiceHandle(CFPBStore *store, CFPBClient client, xpc_object_t reques
 			reply = statusReply(status);
 			xpc_dictionary_set_uint64(reply, CFPB_KEY_COUNT, count);
 			xpc_dictionary_set_int64(reply, CFPB_KEY_LEFT, promisesLeft ? 1 : 0);
+			if (status == kCFPasteboardSuccess && hooks != NULL && hooks->changed != NULL) hooks->changed(client, name, count, getBool(request, CFPB_KEY_HOST));
 			break;
 		}
+		case CFPB_OP_SUBSCRIBE:
+			if (hooks != NULL && hooks->subscribe != NULL) hooks->subscribe(client, name);
+			status = kCFPasteboardSuccess;
+			reply = statusReply(status);
+			break;
 		case CFPB_OP_SET_LOCATION: {
 			CFStringRef text = copyStringArg(request, CFPB_KEY_LOCATION, 8192);
 			if (text == NULL) break;
@@ -306,6 +325,7 @@ void _CFPBServiceHandle(CFPBStore *store, CFPBClient client, xpc_object_t reques
 
 static CFPBStore *serviceStore;
 static dispatch_queue_t serviceQueue;
+static CFMutableDictionaryRef serviceSubscribers;   // board name -> set of subscribed connections (serviceQueue only)
 
 static void serviceStart(xpc_connection_t listener) {
 	static CFPBServiceHooks hooks;
@@ -344,6 +364,39 @@ static void serviceStart(xpc_connection_t listener) {
 		xpc_release(message);
 	});
 
+	hooks.subscribe = Block_copy(^(CFPBClient client, CFStringRef name) {
+		if (serviceSubscribers == NULL) serviceSubscribers = CFDictionaryCreateMutable(kCFAllocatorSystemDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+		CFMutableSetRef set = (CFMutableSetRef)CFDictionaryGetValue(serviceSubscribers, name);
+		if (set == NULL) {
+			set = CFSetCreateMutable(kCFAllocatorSystemDefault, 0, NULL);
+			CFDictionarySetValue(serviceSubscribers, name, set);
+			CFRelease(set);
+		}
+		CFSetAddValue(set, client);
+	});
+	hooks.changed = Block_copy(^(CFPBClient origin, CFStringRef name, uint64_t count, bool host) {
+		CFSetRef set = serviceSubscribers ? CFDictionaryGetValue(serviceSubscribers, name) : NULL;
+		if (set == NULL) return;
+		CFIndex n = CFSetGetCount(set);
+		const void **peers = malloc((n ? n : 1) * sizeof(void *));
+		if (peers == NULL) return;
+		CFSetGetValues(set, peers);
+		char buffer[CFPB_MAX_NAME_BYTES + 1];
+		if (CFStringGetCString(name, buffer, sizeof(buffer), kCFStringEncodingUTF8)) {
+			for (CFIndex i = 0; i < n; ++i) {
+				if (peers[i] == origin) continue;
+				xpc_object_t message = xpc_dictionary_create(NULL, NULL, 0);
+				xpc_dictionary_set_int64(message, CFPB_KEY_OP, CFPB_OP_PUSH_CHANGED);
+				xpc_dictionary_set_string(message, CFPB_KEY_NAME, buffer);
+				xpc_dictionary_set_uint64(message, CFPB_KEY_COUNT, count);
+				xpc_dictionary_set_bool(message, CFPB_KEY_HOST, host);
+				xpc_connection_send_message((xpc_connection_t)peers[i], message);
+				xpc_release(message);
+			}
+		}
+		free(peers);
+	});
+
 	xpc_connection_set_event_handler(listener, ^(xpc_object_t event) {
 		if (xpc_get_type(event) != XPC_TYPE_CONNECTION) return;
 		xpc_connection_t peer = event;
@@ -377,6 +430,15 @@ static void serviceStart(xpc_connection_t listener) {
 			} else if (message == XPC_ERROR_CONNECTION_INVALID) {
 				// the client is gone (the connection is invalid for good after this)
 				_CFPBStoreClientGone(serviceStore, peer);
+				if (serviceSubscribers != NULL) {
+					CFIndex n = CFDictionaryGetCount(serviceSubscribers);
+					const void **sets = malloc((n ? n : 1) * sizeof(void *));
+					if (sets != NULL) {
+						CFDictionaryGetKeysAndValues(serviceSubscribers, NULL, sets);
+						for (CFIndex i = 0; i < n; ++i) CFSetRemoveValue((CFMutableSetRef)sets[i], peer);
+						free(sets);
+					}
+				}
 				xpc_release(peer);
 			}
 		});

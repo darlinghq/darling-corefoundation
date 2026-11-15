@@ -19,8 +19,8 @@ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
 
 // Client side of CFPasteboard (see CFPasteboard_Private.h). Every operation is one request to a board store, built
 // as a message that the store's handler (CFPasteboardService.c) answers. The store is either the user's pboard
-// service, reached over its Mach service, or an in-process store; which one a pasteboard uses is decided when it is
-// created. The promise providers are kept here, in the process that made the promises: the service asks the owner
+// service, reached over its Mach service, or an in-process store (only when no service answers); which one a
+// pasteboard uses is decided when it is created. The promise providers are kept here, in the process that made the promises: the service asks the owner
 // to resolve a promise when another process reads it.
 
 #include "CFPasteboardProtocol.h"
@@ -71,6 +71,7 @@ static int gRemoteState;                 // 0 unknown, 1 reachable, 2 not reacha
 static xpc_endpoint_t gEndpoint;         // set by tests: the service to use instead of the Mach service
 
 static void handlePush(xpc_object_t message);
+static Boolean nameIsBridged(CFStringRef name);
 
 static void setupOnce(void *unused) {
 	gLocalStore = _CFPBStoreCreate(1);
@@ -220,7 +221,7 @@ static void notifyBridge(CFPasteboardRef pasteboard) {
 static void handlePush(xpc_object_t message) {
 	int64_t op = xpc_dictionary_get_int64(message, CFPB_KEY_OP);
 	const char *nameText = xpc_dictionary_get_string(message, CFPB_KEY_NAME);
-	if ((op != CFPB_OP_PUSH_RESOLVE && op != CFPB_OP_PUSH_OWNER_LOST) || nameText == NULL) {
+	if ((op != CFPB_OP_PUSH_RESOLVE && op != CFPB_OP_PUSH_OWNER_LOST && op != CFPB_OP_PUSH_CHANGED) || nameText == NULL) {
 		xpc_object_t answer = xpc_dictionary_create_reply(message);
 		if (answer != NULL) {
 			xpc_dictionary_set_int64(answer, CFPB_KEY_STATUS, kCFPasteboardInvalid);
@@ -238,6 +239,15 @@ static void handlePush(xpc_object_t message) {
 		}
 		if (op == CFPB_OP_PUSH_OWNER_LOST) {
 			generationEnded(name);
+		} else if (op == CFPB_OP_PUSH_CHANGED) {
+			// another process changed a board this process bridges; imports from the host are not exported back
+			if (!xpc_dictionary_get_bool(message, CFPB_KEY_HOST) && nameIsBridged(name)) {
+				CFPasteboardRef pasteboard = CFPasteboardCreate(kCFAllocatorSystemDefault, name);
+				if (pasteboard != NULL) {
+					notifyBridge(pasteboard);
+					CFRelease(pasteboard);
+				}
+			}
 		} else {
 			CFPasteboardStatus status = kCFPasteboardNoProvider;
 			const char *flavorText = xpc_dictionary_get_string(message, CFPB_KEY_FLAVOR);
@@ -300,6 +310,7 @@ static CFPasteboardRef pasteboardAllocate(CFAllocatorRef allocator, CFStringRef 
 	return pasteboard;
 }
 
+// Whether a change of the board is the bridge's business: the general and the drag board once a bridge is registered
 static Boolean nameIsBridged(CFStringRef name) {
 	if (!CFEqual(name, kCFPasteboardGeneral) && !CFEqual(name, __kCFPasteboardDrag)) return false;
 	pthread_mutex_lock(&gLock);
@@ -311,7 +322,7 @@ static Boolean nameIsBridged(CFStringRef name) {
 CFPasteboardRef CFPasteboardCreate(CFAllocatorRef allocator, CFStringRef name) {
 	if (name == NULL || CFGetTypeID(name) != CFStringGetTypeID()) return NULL;
 	Boolean bridged = nameIsBridged(name);
-	Boolean remote = !bridged && remoteAvailable();
+	Boolean remote = remoteAvailable();
 	CFPasteboardRef pasteboard = pasteboardAllocate(allocator, name, remote, bridged);
 	if (pasteboard == NULL) return NULL;
 	dispatch_once_f(&gOnce, NULL, setupOnce);
@@ -319,6 +330,8 @@ CFPasteboardRef CFPasteboardCreate(CFAllocatorRef allocator, CFStringRef name) {
 		CFRelease(pasteboard);
 		return NULL;
 	}
+	// a bridge hears about other processes' changes through the service
+	if (bridged && remote) perform(pasteboard, newRequest(CFPB_OP_SUBSCRIBE, name), NULL);
 	return pasteboard;
 }
 
@@ -360,9 +373,11 @@ CFIndex CFPasteboardGetChangeCount(CFPasteboardRef pasteboard) {
 	return count;
 }
 
-static CFIndex beginGeneration(CFPasteboardRef pasteboard, Boolean notify) {
+static CFIndex beginGeneration(CFPasteboardRef pasteboard, Boolean notify, Boolean host) {
 	xpc_object_t reply = NULL;
-	if (perform(pasteboard, newRequest(CFPB_OP_BEGIN, pasteboard->name), &reply) != kCFPasteboardSuccess) return 0;
+	xpc_object_t request = newRequest(CFPB_OP_BEGIN, pasteboard->name);
+	if (host) xpc_dictionary_set_bool(request, CFPB_KEY_HOST, true);
+	if (perform(pasteboard, request, &reply) != kCFPasteboardSuccess) return 0;
 	CFIndex count = (CFIndex)xpc_dictionary_get_uint64(reply, CFPB_KEY_COUNT);
 	xpc_release(reply);
 	// whatever this process promised for the board in the earlier generation is void now
@@ -372,7 +387,7 @@ static CFIndex beginGeneration(CFPasteboardRef pasteboard, Boolean notify) {
 }
 
 CFIndex CFPasteboardBeginGeneration(CFPasteboardRef pasteboard) {
-	return beginGeneration(pasteboard, true);
+	return beginGeneration(pasteboard, true, false);
 }
 
 CFPasteboardStatus CFPasteboardGetItemCount(CFPasteboardRef pasteboard, CFIndex *count) {
@@ -430,22 +445,27 @@ CFPasteboardStatus CFPasteboardCopyFlavorsForItem(CFPasteboardRef pasteboard, CF
 	return kCFPasteboardSuccess;
 }
 
-CFPasteboardStatus CFPasteboardGetDataFlags(CFPasteboardRef pasteboard, CFPasteboardItemID item, CFStringRef flavor, CFPasteboardFlavorFlags *flags) {
+static CFPasteboardStatus flavorInfo(CFPasteboardRef pasteboard, CFPasteboardItemID item, CFStringRef flavor, CFPasteboardFlavorFlags *flags, Boolean *promised) {
 	xpc_object_t request = newRequest(CFPB_OP_FLAVOR_INFO, pasteboard->name);
 	xpc_dictionary_set_uint64(request, CFPB_KEY_ITEM, item);
 	setFlavorArg(request, flavor);
 	xpc_object_t reply = NULL;
 	CFPasteboardStatus status = perform(pasteboard, request, &reply);
 	if (status == kCFPasteboardSuccess) {
-		*flags = (CFPasteboardFlavorFlags)xpc_dictionary_get_uint64(reply, CFPB_KEY_FLAGS);
+		if (flags != NULL) *flags = (CFPasteboardFlavorFlags)xpc_dictionary_get_uint64(reply, CFPB_KEY_FLAGS);
+		if (promised != NULL) *promised = xpc_dictionary_get_bool(reply, CFPB_KEY_PROMISED);
 		xpc_release(reply);
 	}
 	return status;
 }
 
+CFPasteboardStatus CFPasteboardGetDataFlags(CFPasteboardRef pasteboard, CFPasteboardItemID item, CFStringRef flavor, CFPasteboardFlavorFlags *flags) {
+	return flavorInfo(pasteboard, item, flavor, flags, NULL);
+}
+
 Boolean CFPasteboardIsDataPromised(CFPasteboardRef pasteboard, CFPasteboardItemID item, CFStringRef flavor) {
-	CFPasteboardFlavorFlags flags = 0;
-	return CFPasteboardGetDataFlags(pasteboard, item, flavor, &flags) == kCFPasteboardSuccess && (flags & kCFPasteboardFlavorPromised) != 0;
+	Boolean promised = false;
+	return flavorInfo(pasteboard, item, flavor, NULL, &promised) == kCFPasteboardSuccess && promised;
 }
 
 // Fires allProvided once, after the last promise of the generation was kept
@@ -499,8 +519,9 @@ CFPasteboardStatus CFPasteboardCopyData(CFPasteboardRef pasteboard, CFPasteboard
 	return status;
 }
 
-static CFPasteboardStatus setFlavor(CFPasteboardRef pasteboard, CFPasteboardItemID item, CFStringRef flavor, CFDataRef data, CFPasteboardFlavorFlags flags, Boolean promised, uint64_t *changeCount, Boolean *promisesLeft) {
+static CFPasteboardStatus setFlavor(CFPasteboardRef pasteboard, CFPasteboardItemID item, CFStringRef flavor, CFDataRef data, CFPasteboardFlavorFlags flags, Boolean promised, Boolean host, uint64_t *changeCount, Boolean *promisesLeft) {
 	xpc_object_t request = newRequest(CFPB_OP_SET, pasteboard->name);
+	if (host) xpc_dictionary_set_bool(request, CFPB_KEY_HOST, true);
 	xpc_dictionary_set_uint64(request, CFPB_KEY_ITEM, item);
 	xpc_dictionary_set_uint64(request, CFPB_KEY_FLAGS, flags);
 	xpc_dictionary_set_bool(request, CFPB_KEY_PROMISED, promised);
@@ -516,12 +537,12 @@ static CFPasteboardStatus setFlavor(CFPasteboardRef pasteboard, CFPasteboardItem
 	return status;
 }
 
-static CFPasteboardStatus setData(CFPasteboardRef pasteboard, CFPasteboardItemID item, CFStringRef flavor, CFDataRef data, CFPasteboardFlavorFlags flags, Boolean notify) {
+static CFPasteboardStatus setData(CFPasteboardRef pasteboard, CFPasteboardItemID item, CFStringRef flavor, CFDataRef data, CFPasteboardFlavorFlags flags, Boolean notify, Boolean host) {
 	if (data == NULL) data = CFDataCreate(kCFAllocatorSystemDefault, NULL, 0);
 	else CFRetain(data);
 	uint64_t count = 0;
 	Boolean promisesLeft = false;
-	CFPasteboardStatus status = setFlavor(pasteboard, item, flavor, data, flags, false, &count, &promisesLeft);
+	CFPasteboardStatus status = setFlavor(pasteboard, item, flavor, data, flags, false, host, &count, &promisesLeft);
 	CFRelease(data);
 	if (status == kCFPasteboardSuccess) {
 		promiseKept(pasteboard, promisesLeft);
@@ -531,15 +552,15 @@ static CFPasteboardStatus setData(CFPasteboardRef pasteboard, CFPasteboardItemID
 }
 
 CFPasteboardStatus CFPasteboardSetData(CFPasteboardRef pasteboard, CFPasteboardItemID item, CFStringRef flavor, CFDataRef data, CFPasteboardFlavorFlags flags) {
-	return setData(pasteboard, item, flavor, data, flags, true);
+	return setData(pasteboard, item, flavor, data, flags, true, false);
 }
 
 static CFPasteboardStatus promiseData(CFPasteboardRef pasteboard, CFPasteboardItemID item, CFStringRef flavor, CFPasteboardFlavorFlags flags,
-		const CFPasteboardProviderCallbacks *provider, void *info, Boolean notify) {
+		const CFPasteboardProviderCallbacks *provider, void *info, Boolean notify, Boolean host) {
 	if (provider == NULL || provider->provide == NULL || provider->version != 0) return kCFPasteboardNoProvider;
 	uint64_t count = 0;
 	Boolean promisesLeft = false;
-	CFPasteboardStatus status = setFlavor(pasteboard, item, flavor, NULL, flags, true, &count, &promisesLeft);
+	CFPasteboardStatus status = setFlavor(pasteboard, item, flavor, NULL, flags, true, host, &count, &promisesLeft);
 	if (status != kCFPasteboardSuccess) return status;
 
 	ProviderEntry *fresh = malloc(sizeof(*fresh));
@@ -573,7 +594,7 @@ static CFPasteboardStatus promiseData(CFPasteboardRef pasteboard, CFPasteboardIt
 
 CFPasteboardStatus CFPasteboardPromiseData(CFPasteboardRef pasteboard, CFPasteboardItemID item, CFStringRef flavor, CFPasteboardFlavorFlags flags,
 		const CFPasteboardProviderCallbacks *provider, void *info) {
-	return promiseData(pasteboard, item, flavor, flags, provider, info, true);
+	return promiseData(pasteboard, item, flavor, flags, provider, info, true, false);
 }
 
 CFPasteboardStatus CFPasteboardResolveAllPromisedData(CFPasteboardRef pasteboard) {
@@ -648,7 +669,7 @@ static CFPasteboardStatus bridgeProvide(CFPasteboardRef pasteboard, CFPasteboard
 	// the item's position is its identifier minus the first one handed out by ReplaceContents
 	CFDataRef data = bridge.copyData(pasteboard->name, (CFIndex)(item - 1), flavor, bridge.info);
 	if (data == NULL) return kCFPasteboardNoProvider;
-	CFPasteboardStatus status = setData(pasteboard, item, flavor, data, kCFPasteboardFlavorNoFlags, false);
+	CFPasteboardStatus status = setData(pasteboard, item, flavor, data, kCFPasteboardFlavorNoFlags, false, true);
 	CFRelease(data);
 	return status;
 }
@@ -657,7 +678,7 @@ CFIndex CFPasteboardHostBridgeReplaceContents(CFStringRef name, CFArrayRef items
 	if (name == NULL || items == NULL || !nameIsBridged(name)) return 0;
 	CFPasteboardRef pasteboard = CFPasteboardCreate(kCFAllocatorSystemDefault, name);
 	if (pasteboard == NULL) return 0;
-	CFIndex count = beginGeneration(pasteboard, false);
+	CFIndex count = beginGeneration(pasteboard, false, true);
 	static const CFPasteboardProviderCallbacks provider = { 0, bridgeProvide, NULL, NULL, NULL };
 	for (CFIndex i = 0; count != 0 && i < CFArrayGetCount(items); ++i) {
 		CFDictionaryRef flavors = CFArrayGetValueAtIndex(items, i);
@@ -671,8 +692,8 @@ CFIndex CFPasteboardHostBridgeReplaceContents(CFStringRef name, CFArrayRef items
 				if (CFGetTypeID(keys[k]) != CFStringGetTypeID()) continue;
 				// items of a replaced board are numbered from 1 in array order so that a lazy flavor can be
 				// mapped back to its position
-				if (values[k] == kCFNull) promiseData(pasteboard, (CFPasteboardItemID)(i + 1), keys[k], kCFPasteboardFlavorNoFlags, &provider, NULL, false);
-				else if (CFGetTypeID(values[k]) == CFDataGetTypeID()) setData(pasteboard, (CFPasteboardItemID)(i + 1), keys[k], values[k], kCFPasteboardFlavorNoFlags, false);
+				if (values[k] == kCFNull) promiseData(pasteboard, (CFPasteboardItemID)(i + 1), keys[k], kCFPasteboardFlavorNoFlags, &provider, NULL, false, true);
+				else if (CFGetTypeID(values[k]) == CFDataGetTypeID()) setData(pasteboard, (CFPasteboardItemID)(i + 1), keys[k], values[k], kCFPasteboardFlavorNoFlags, false, true);
 			}
 		}
 		free(keys);
