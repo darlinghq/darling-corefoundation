@@ -400,11 +400,9 @@ static void serviceStart(xpc_connection_t listener) {
 	xpc_connection_set_event_handler(listener, ^(xpc_object_t event) {
 		if (xpc_get_type(event) != XPC_TYPE_CONNECTION) return;
 		xpc_connection_t peer = event;
-		// the service belongs to one user: nobody else may use it
-		if (xpc_connection_get_euid(peer) != geteuid()) {
-			xpc_connection_cancel(peer);
-			return;
-		}
+		// Every process that can reach the service name may use it: in Darling's container, whose single user is the
+		// host user, launchd runs the job as root while the user's processes are not, so the user of a peer says
+		// nothing about whether it may share the pasteboards.
 		xpc_retain(peer);
 		xpc_connection_set_target_queue(peer, serviceQueue);
 		xpc_connection_set_event_handler(peer, ^(xpc_object_t message) {

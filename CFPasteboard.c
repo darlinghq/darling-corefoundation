@@ -79,6 +79,8 @@ static void setupOnce(void *unused) {
 	gProviderQueue = dispatch_queue_create("com.apple.pasteboard.client.providers", DISPATCH_QUEUE_CONCURRENT);
 }
 
+#define HELLO_TIMEOUT_SECONDS 5
+
 static Boolean remoteAvailable(void) {
 	dispatch_once_f(&gOnce, NULL, setupOnce);
 	pthread_mutex_lock(&gLock);
@@ -98,11 +100,20 @@ static Boolean remoteAvailable(void) {
 			xpc_connection_resume(connection);
 			xpc_object_t hello = xpc_dictionary_create(NULL, NULL, 0);
 			xpc_dictionary_set_int64(hello, CFPB_KEY_OP, CFPB_OP_HELLO);
-			xpc_object_t answer = xpc_connection_send_message_with_reply_sync(connection, hello);
+			// a service that is not there, or does not answer, must not hold the process up for ever
+			__block int64_t status = -1;
+			dispatch_semaphore_t answered = dispatch_semaphore_create(0);
+			xpc_connection_send_message_with_reply(connection, hello, gQueue, ^(xpc_object_t answer) {
+				if (xpc_get_type(answer) == XPC_TYPE_DICTIONARY) status = xpc_dictionary_get_int64(answer, CFPB_KEY_STATUS);
+				dispatch_semaphore_signal(answered);
+			});
 			xpc_release(hello);
-			int64_t status = -1;
-			if (xpc_get_type(answer) == XPC_TYPE_DICTIONARY) status = xpc_dictionary_get_int64(answer, CFPB_KEY_STATUS);
-			xpc_release(answer);
+			if (dispatch_semaphore_wait(answered, dispatch_time(DISPATCH_TIME_NOW, HELLO_TIMEOUT_SECONDS * NSEC_PER_SEC)) != 0) {
+				// the late answer may still signal the semaphore, so it is not released
+				status = -1;
+			} else {
+				dispatch_release(answered);
+			}
 			if (status == kCFPasteboardSuccess) {
 				gConnection = connection;
 				gRemoteState = 1;
