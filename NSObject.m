@@ -72,6 +72,38 @@ void __CFZombifyNSObject(void) {
     method_exchangeImplementations(dealloc_zombie, dealloc);
 }
 
+#if !__OBJC2__
+// With the legacy Objective-C runtime (i386) class Protocol derives from Object, which has no
+// memory management and none of the other basic NSObject messages. Protocol objects still have to
+// work as ordinary objects: ARC-compiled code retains and releases them (for instance a Protocol *
+// held in a strong variable), and containers and proxies send them -description and the like.
+// Give Protocol the NSObject implementations of the messages it does not answer itself.
+void __CFInitializeProtocolObjectMethods(void) {
+    static const char *const names[] = {
+        "retain", "release", "autorelease", "retainCount", "zone", "description", "superclass",
+        "respondsToSelector:", "conformsToProtocol:", "isKindOfClass:", "isMemberOfClass:", "isProxy",
+        "performSelector:", "performSelector:withObject:", "performSelector:withObject:withObject:",
+    };
+    Class protocol = objc_lookUpClass("Protocol");
+    Class nsobject = objc_lookUpClass("NSObject");
+    if (protocol == Nil || nsobject == Nil)
+        return;
+    for (Class cls = protocol; cls != Nil; cls = class_getSuperclass(cls)) {
+        if (cls == nsobject)
+            return;  // derives from NSObject (modern runtime layout): nothing to add
+    }
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        SEL sel = sel_registerName(names[i]);
+        if (class_getInstanceMethod(protocol, sel) != NULL)
+            continue;
+        Method method = class_getInstanceMethod(nsobject, sel);
+        if (method != NULL)
+            class_addMethod(protocol, sel, method_getImplementation(method), method_getTypeEncoding(method));
+    }
+    class_addProtocol(protocol, @protocol(NSObject));
+}
+#endif
+
 static void NSUnrecognizedForwarding() { __asm__("int3"); }
 
 @implementation NSObject (NSObject)

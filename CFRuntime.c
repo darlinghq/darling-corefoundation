@@ -73,6 +73,9 @@ __kCFReleaseEvent = 29
 
 #if DEPLOYMENT_TARGET_MACOSX || DEPLOYMENT_TARGET_EMBEDDED
 CF_PRIVATE void __CFOAInitializeNSObject(void);  // from NSObject.m
+#if !__OBJC2__
+CF_PRIVATE void __CFInitializeProtocolObjectMethods(void);  // from NSObject.m
+#endif
 
 bool __CFOASafe = false;
 
@@ -967,6 +970,9 @@ void __CFInitialize(void) {
         memset(__CFRuntimeClassTable, 0, sizeof(__CFRuntimeClassTable));
         memset(__CFRuntimeObjCClassTable, 0, sizeof(__CFRuntimeObjCClassTable));
 
+#if !__OBJC2__
+        __CFInitializeProtocolObjectMethods();
+#endif
         _CFRuntimeBridgeClasses(0, "__NSCFType");
         for (CFIndex idx = 1; idx < __CFRuntimeClassTableSize; ++idx) {
             __CFRuntimeObjCClassTable[idx] = __CFRuntimeObjCClassTable[0];
