@@ -20,8 +20,9 @@ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
 // The service side of CFPasteboard: the request handler shared with the in-process store, and the pboard service
 // loop (the daemon binary only calls __CFPasteboardRunService).
 //
-// The service is per user: it is a launchd job of the user's domain and, in addition, refuses any peer whose
-// effective uid differs from its own. Every request field is checked for type and size before it is used; the store
+// The service answers every client that can reach its name: in Darling's container the job runs as root while the
+// user's processes do not, and the container has a single user, so the peer's user says nothing about whether it
+// may share the pasteboards. Every request field is checked for type and size before it is used; the store
 // enforces the limits on names, flavors and data again.
 
 #include "CFPasteboardProtocol.h"
