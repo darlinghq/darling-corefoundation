@@ -56,6 +56,7 @@ set(cf_c_sources
 	CFDateFormatter.c
 	CFDictionary.c
 	CFError.c
+	CFFileDescriptor.c
 	CFFileUtilities.c
 	CFCharacterSet.c
 	CFICUConverters.c
