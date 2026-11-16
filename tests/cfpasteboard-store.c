@@ -8,7 +8,7 @@
  */
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreFoundation/CFPasteboard_Private.h>
-#include "CFPasteboardProtocol.h"   // the service's messages (private; build with -I<corefoundation source dir>)
+#include "CFPasteboardProtocol.h"   // the service's messages (private; build with -I<corefoundation source dir> -DCF_PRIVATE=)
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -211,6 +211,37 @@ static void testPromises(void) {
 	CFRelease(plain);
 	CFPasteboardReleaseGlobally(pb);
 	CFRelease(pb);
+}
+
+// The store serves untrusted peers: items are capped per board and for all boards together, and what a board
+// held is available again once it is released.
+static void testStoreLimits(void) {
+	enum { boards = 17 };
+	CFPasteboardRef pb[boards];
+	CFIndex added = 0, perBoardMax = 0;
+	for (int i = 0; i < boards; ++i) {
+		pb[i] = CFPasteboardCreateUnique(NULL);
+		CHECK(pb[i] != NULL);
+		CFPasteboardBeginGeneration(pb[i]);
+		CFIndex own = 0;
+		CFPasteboardItemID item;
+		while (CFPasteboardAddItem(pb[i], &item) == kCFPasteboardSuccess) own++;
+		added += own;
+		if (own > perBoardMax) perBoardMax = own;
+	}
+	CHECK(perBoardMax == 4096);
+	CHECK(added > 4096 && added < (CFIndex)boards * 4096);
+	CFPasteboardItemID item;
+	CHECK(CFPasteboardAddItem(pb[boards - 1], &item) == kCFPasteboardTooLarge);
+	for (int i = 0; i < boards; ++i) {
+		CFPasteboardReleaseGlobally(pb[i]);
+		CFRelease(pb[i]);
+	}
+	CFPasteboardRef again = CFPasteboardCreateUnique(NULL);
+	CFPasteboardBeginGeneration(again);
+	CHECK(CFPasteboardAddItem(again, &item) == kCFPasteboardSuccess);
+	CFPasteboardReleaseGlobally(again);
+	CFRelease(again);
 }
 
 static void testPasteLocation(void) {
@@ -550,6 +581,9 @@ int main(int argc, char **argv) {
 	testBasics();
 	testInvalid();
 	testPromises();
+	// the same store code answers in both modes; the limits take tens of thousands of requests, which only the
+	// local mode answers quickly
+	if (endpoint == NULL) testStoreLimits();
 	testPasteLocation();
 	if (endpoint != NULL) {
 		testPeers(endpoint);

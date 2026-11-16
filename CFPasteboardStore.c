@@ -57,6 +57,9 @@ struct __CFPBStore {
 	pthread_mutex_t lock;
 	CFMutableDictionaryRef boards;   // name -> CFPBBoard* (stored as raw pointers)
 	uint64_t initialCount;
+	uint64_t totalBytes;     // data held by all boards together
+	uint64_t totalFlavors;   // flavor entries of all boards together
+	uint64_t totalItems;     // items of all boards together
 };
 
 #define STORE_LOCK(s) pthread_mutex_lock(&(s)->lock)
@@ -85,11 +88,14 @@ static void flavorDestroy(CFPBFlavor *flavor) {
 	if (flavor->data != NULL) CFRelease(flavor->data);
 }
 
-static void boardClear(CFPBBoard *board) {
+static void boardClear(CFPBStore *store, CFPBBoard *board) {
 	for (CFIndex i = 0; i < board->count; ++i) {
 		for (CFIndex k = 0; k < board->items[i].count; ++k) flavorDestroy(&board->items[i].flavors[k]);
+		store->totalFlavors -= (uint64_t)board->items[i].count;
 		free(board->items[i].flavors);
 	}
+	store->totalBytes -= board->dataBytes;
+	store->totalItems -= (uint64_t)board->count;
 	board->count = 0;
 	board->dataBytes = 0;
 	if (board->pasteLocation != NULL) {
@@ -98,8 +104,8 @@ static void boardClear(CFPBBoard *board) {
 	}
 }
 
-static void boardDestroy(CFPBBoard *board) {
-	boardClear(board);
+static void boardDestroy(CFPBStore *store, CFPBBoard *board) {
+	boardClear(store, board);
 	free(board->items);
 	CFRelease(board->name);
 	free(board);
@@ -130,8 +136,8 @@ static CFPBItem *itemFind(CFPBBoard *board, CFPasteboardItemID id) {
 	return NULL;
 }
 
-static CFPBItem *itemAppend(CFPBBoard *board, CFPasteboardItemID id) {
-	if (board->count >= CFPB_MAX_ITEMS) return NULL;
+static CFPBItem *itemAppend(CFPBStore *store, CFPBBoard *board, CFPasteboardItemID id) {
+	if (board->count >= CFPB_MAX_ITEMS || store->totalItems >= CFPB_MAX_TOTAL_ITEMS) return NULL;
 	if (board->count == board->capacity) {
 		CFIndex capacity = board->capacity ? board->capacity * 2 : 4;
 		CFPBItem *grown = realloc(board->items, capacity * sizeof(CFPBItem));
@@ -140,6 +146,7 @@ static CFPBItem *itemAppend(CFPBBoard *board, CFPasteboardItemID id) {
 		board->capacity = capacity;
 	}
 	CFPBItem *item = &board->items[board->count++];
+	store->totalItems++;
 	memset(item, 0, sizeof(*item));
 	item->id = id;
 	return item;
@@ -198,7 +205,7 @@ CFPasteboardStatus _CFPBStoreReleaseUnique(CFPBStore *store, CFStringRef name, C
 	CFPBBoard *board = boardFind(store, name);
 	if (board != NULL && board->unique && board->creator == client) {
 		CFDictionaryRemoveValue(store->boards, board->name);
-		boardDestroy(board);
+		boardDestroy(store, board);
 		status = kCFPasteboardSuccess;
 	}
 	STORE_UNLOCK(store);
@@ -212,7 +219,7 @@ CFPasteboardStatus _CFPBStoreBegin(CFPBStore *store, CFStringRef name, CFPBClien
 	if (board == NULL) board = boardCreate(store, name, false, NULL);
 	CFPasteboardStatus status = kCFPasteboardTooLarge;
 	if (board != NULL) {
-		boardClear(board);
+		boardClear(store, board);
 		*previousOwner = board->owner;
 		board->owner = client;
 		*newCount = ++board->changeCount;
@@ -258,7 +265,7 @@ CFPasteboardStatus _CFPBStoreAddItem(CFPBStore *store, CFStringRef name, CFPBCli
 	CFPasteboardStatus status = kCFPasteboardNotOwner;
 	if (board != NULL && board->owner == client) {
 		while (itemFind(board, board->nextItemID) != NULL) board->nextItemID++;
-		CFPBItem *added = itemAppend(board, board->nextItemID);
+		CFPBItem *added = itemAppend(store, board, board->nextItemID);
 		if (added != NULL) {
 			*item = board->nextItemID++;
 			status = kCFPasteboardSuccess;
@@ -331,7 +338,7 @@ CFPasteboardStatus _CFPBStoreSetFlavor(CFPBStore *store, CFStringRef name, CFPBC
 	CFPasteboardStatus status = kCFPasteboardNotOwner;
 	if (board != NULL && board->owner == client && client != NULL) {
 		CFPBItem *found = itemFind(board, item);
-		if (found == NULL) found = itemAppend(board, item);
+		if (found == NULL) found = itemAppend(store, board, item);
 		CFPBFlavor *entry = found ? flavorFind(found, flavor) : NULL;
 		uint64_t previous = (entry && entry->data) ? (uint64_t)CFDataGetLength(entry->data) : 0;
 		if (found == NULL) {
@@ -339,6 +346,8 @@ CFPasteboardStatus _CFPBStoreSetFlavor(CFPBStore *store, CFStringRef name, CFPBC
 		} else if (board->dataBytes - previous + length > CFPB_MAX_BOARD_DATA) {
 			status = kCFPasteboardTooLarge;
 		} else if (entry == NULL && found->count >= CFPB_MAX_FLAVORS) {
+			status = kCFPasteboardTooLarge;
+		} else if (store->totalBytes - previous + length > CFPB_MAX_TOTAL_DATA || (entry == NULL && store->totalFlavors >= CFPB_MAX_TOTAL_FLAVORS)) {
 			status = kCFPasteboardTooLarge;
 		} else {
 			if (entry == NULL) {
@@ -350,6 +359,7 @@ CFPasteboardStatus _CFPBStoreSetFlavor(CFPBStore *store, CFStringRef name, CFPBC
 					found->capacity = capacity;
 				}
 				entry = &found->flavors[found->count++];
+				store->totalFlavors++;
 				memset(entry, 0, sizeof(*entry));
 				entry->type = CFStringCreateCopy(kCFAllocatorSystemDefault, flavor);
 			} else if (entry->data != NULL) {
@@ -357,6 +367,7 @@ CFPasteboardStatus _CFPBStoreSetFlavor(CFPBStore *store, CFStringRef name, CFPBC
 				entry->data = NULL;
 			}
 			board->dataBytes = board->dataBytes - previous + length;
+			store->totalBytes = store->totalBytes - previous + length;
 			entry->data = data ? CFDataCreateCopy(kCFAllocatorSystemDefault, data) : (promised ? NULL : CFDataCreate(kCFAllocatorSystemDefault, NULL, 0));
 			entry->flags = flags;
 			entry->promised = promised;
@@ -412,7 +423,7 @@ void _CFPBStoreClientGone(CFPBStore *store, CFPBClient client) {
 			CFPBBoard *board = boards[i];
 			if (board->unique && board->creator == client) {
 				CFDictionaryRemoveValue(store->boards, board->name);
-				boardDestroy(board);
+				boardDestroy(store, board);
 			} else if (board->owner == client) {
 				// promises of a departed owner can never be kept: drop those flavors
 				for (CFIndex a = 0; a < board->count; ++a) {
@@ -420,6 +431,7 @@ void _CFPBStoreClientGone(CFPBStore *store, CFPBClient client) {
 					for (CFIndex b = 0; b < item->count;) {
 						if (item->flavors[b].promised) {
 							flavorDestroy(&item->flavors[b]);
+							store->totalFlavors--;
 							memmove(&item->flavors[b], &item->flavors[b + 1], (item->count - b - 1) * sizeof(CFPBFlavor));
 							item->count--;
 						} else {

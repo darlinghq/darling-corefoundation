@@ -37,6 +37,10 @@ CF_EXTERN_C_BEGIN
 #define CFPB_MAX_FLAVORS 512
 #define CFPB_MAX_FLAVOR_DATA ((uint64_t)256 << 20)
 #define CFPB_MAX_BOARD_DATA ((uint64_t)1024 << 20)
+// All boards together: what the service holds for one user stays bounded however many boards and flavors are made
+#define CFPB_MAX_TOTAL_DATA ((uint64_t)2048 << 20)
+#define CFPB_MAX_TOTAL_FLAVORS ((uint64_t)262144)
+#define CFPB_MAX_TOTAL_ITEMS ((uint64_t)65536)
 
 typedef const void *CFPBClient;
 typedef struct __CFPBStore CFPBStore;
