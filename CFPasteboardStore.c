@@ -165,6 +165,11 @@ CFPBStore *_CFPBStoreCreate(uint64_t initialCount) {
 	pthread_mutex_init(&store->lock, NULL);
 	store->boards = CFDictionaryCreateMutable(kCFAllocatorSystemDefault, 0, &kCFTypeDictionaryKeyCallBacks, NULL);
 	store->initialCount = initialCount;
+	// The standard boards exist from the start, so a client that makes the store hold as many boards as it allows
+	// cannot keep the standard ones from being created later.
+	CFStringRef const standard[] = { kCFPasteboardGeneral, kCFPasteboardFind, __kCFPasteboardDrag,
+		CFSTR("Apple CFPasteboard font"), CFSTR("Apple CFPasteboard ruler") };
+	for (size_t i = 0; i < sizeof(standard) / sizeof(standard[0]); ++i) boardCreate(store, standard[i], false, NULL);
 	return store;
 }
 

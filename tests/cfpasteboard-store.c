@@ -244,6 +244,31 @@ static void testStoreLimits(void) {
 	CFRelease(again);
 }
 
+// The standard boards are there from the start: a client that fills every board slot with boards of its own
+// cannot keep them from being opened. Must run before anything else opens a board in the process.
+static void testStandardBoardsReserved(void) {
+	enum { slots = 4096 };
+	static CFPasteboardRef filler[slots];
+	CFIndex made = 0;
+	while (made < slots && (filler[made] = CFPasteboardCreateUnique(NULL)) != NULL) made++;
+	CHECK(made > 4000 && made < slots);
+	CFStringRef const standard[] = { kCFPasteboardGeneral, kCFPasteboardFind, __kCFPasteboardDrag,
+		CFSTR("Apple CFPasteboard font"), CFSTR("Apple CFPasteboard ruler") };
+	for (size_t i = 0; i < sizeof(standard) / sizeof(standard[0]); ++i) {
+		CFPasteboardRef pb = CFPasteboardCreate(NULL, standard[i]);
+		CHECK(pb != NULL);
+		if (pb != NULL) CFRelease(pb);
+	}
+	// a name that is not a standard one finds no slot
+	CFPasteboardRef extra = CFPasteboardCreate(NULL, CFSTR("com.example.extra-board"));
+	CHECK(extra == NULL);
+	if (extra != NULL) CFRelease(extra);
+	for (CFIndex i = 0; i < made; ++i) {
+		CFPasteboardReleaseGlobally(filler[i]);
+		CFRelease(filler[i]);
+	}
+}
+
 static void testPasteLocation(void) {
 	CFPasteboardRef pb = CFPasteboardCreateUnique(NULL);
 	CFPasteboardBeginGeneration(pb);
@@ -578,6 +603,7 @@ int main(int argc, char **argv) {
 		endpoint = __CFPasteboardStartInProcessService();
 		__CFPasteboardAdoptServiceEndpoint(endpoint);
 	}
+	if (endpoint == NULL) testStandardBoardsReserved();
 	testBasics();
 	testInvalid();
 	testPromises();
