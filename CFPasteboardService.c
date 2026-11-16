@@ -437,7 +437,12 @@ static void serviceStart(xpc_connection_t listener) {
 						free(sets);
 					}
 				}
-				xpc_release(peer);
+				// libxpc may still touch the connection for a reply it was waiting for (a promise the service asked the
+				// peer to keep) when the connection became invalid, and releasing it at once left the service with a
+				// freed object (it crashed). The connection is given up a little later, by when such replies are done.
+				dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * PROMISE_TIMEOUT_SECONDS * NSEC_PER_SEC), serviceQueue, ^{
+					xpc_release(peer);
+				});
 			}
 		});
 		xpc_connection_resume(peer);
