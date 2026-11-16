@@ -113,6 +113,9 @@ set(cf_c_sources
 	CFXMLTree.c
 	CFURLEnumerator.c
 	CFXPCBridge.c
+	CFPasteboard.c
+	CFPasteboardService.c
+	CFPasteboardStore.c
 )
 
 # CFURLComponents comes unmodified from the swift-corelibs-foundation
