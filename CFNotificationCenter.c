@@ -10,12 +10,15 @@
 #include "CFNotificationCenter.h"
 #include "CFString.h"
 #include "CFArray.h"
+#include "CFDistributedNotificationInternal.h"
 #include <libkern/OSAtomic.h>
 
 struct __CFNotificationCenter {
     CFRuntimeBase _base;
     OSSpinLock lock;
     CFMutableArrayRef observers;
+    Boolean distributed;   // the distributed center: observers and notifications go through CFDistributedNotification.c
+    Boolean suspended;
 };
 
 static void __CFNotificationCenterDeallocate(CFTypeRef cf) {
@@ -134,13 +137,19 @@ CF_EXPORT CFNotificationCenterRef CFNotificationCenterGetDarwinNotifyCenter(void
 CF_EXPORT CFNotificationCenterRef CFNotificationCenterGetDistributedCenter(void) {
     OSSpinLockLock(&centerLock);
     if (distributedCenter == NULL) {
-        distributedCenter = _CFNotificationCenterCreate(kCFAllocatorDefault);
+        struct __CFNotificationCenter *center = _CFNotificationCenterCreate(kCFAllocatorDefault);
+        center->distributed = true;
+        distributedCenter = center;
     }
     OSSpinLockUnlock(&centerLock);
     return distributedCenter;
 }
 
 CF_EXPORT void CFNotificationCenterAddObserver(CFNotificationCenterRef center, const void *observer, CFNotificationCallback callBack, CFStringRef name, const void *object, CFNotificationSuspensionBehavior suspensionBehavior) {
+    if (center->distributed) {
+        _CFDistributedAddObserver(observer, callBack, name, (CFStringRef)object, suspensionBehavior);
+        return;
+    }
     CFNotificationObserver *obs = (CFNotificationObserver *)malloc(sizeof(CFNotificationObserver));
     obs->retainCount = 0;
     obs->observer = observer;
@@ -199,6 +208,10 @@ CF_EXPORT void CFNotificationCenterRemoveObserver(CFNotificationCenterRef center
     if (observer == NULL) {
         return;
     }
+    if (center->distributed) {
+        _CFDistributedRemoveObserver(observer, name, (CFStringRef)object);
+        return;
+    }
     OSSpinLockLock(&center->lock);
     CFNotificationObserver ctx = {
         .observer = observer,
@@ -228,16 +241,24 @@ CF_EXPORT void CFNotificationCenterRemoveObserver(CFNotificationCenterRef center
 }
 
 CF_EXPORT void CFNotificationCenterRemoveEveryObserver(CFNotificationCenterRef center, const void *observer) {
+    if (center->distributed) {
+        if (observer != NULL) _CFDistributedRemoveObserver(observer, NULL, NULL);
+        return;
+    }
     OSSpinLockLock(&center->lock);
     CFArrayRemoveAllValues(center->observers);
     OSSpinLockUnlock(&center->lock);
 }
 
 CF_EXPORT void CFNotificationCenterPostNotification(CFNotificationCenterRef center, CFStringRef name, const void *object, CFDictionaryRef userInfo, Boolean deliverImmediately) {
-    CFNotificationCenterPostNotificationWithOptions(center, name, object, userInfo, kCFNotificationDeliverImmediately);
+    CFNotificationCenterPostNotificationWithOptions(center, name, object, userInfo, deliverImmediately ? kCFNotificationDeliverImmediately : 0);
 }
 
 CF_EXPORT void CFNotificationCenterPostNotificationWithOptions(CFNotificationCenterRef center, CFStringRef name, const void *object, CFDictionaryRef userInfo, CFOptionFlags options) {
+    if (center->distributed) {
+        _CFDistributedPost(name, (CFStringRef)object, userInfo, (options & kCFNotificationDeliverImmediately) != 0);
+        return;
+    }
     // since this is not cross process, we can just deliver all of the notifs immediately
     OSSpinLockLock(&center->lock);
     CFArrayRef observers = CFArrayCreateCopy(kCFAllocatorDefault, center->observers);
@@ -256,3 +277,14 @@ CF_EXPORT void CFNotificationCenterPostNotificationWithOptions(CFNotificationCen
     CFRelease(observers);
 }
 
+
+CF_EXPORT void CFNotificationCenterSetSuspended(CFNotificationCenterRef center, Boolean suspended) {
+    if (center->distributed) {
+        _CFDistributedSetSuspended(suspended);
+    }
+    center->suspended = suspended;
+}
+
+CF_EXPORT Boolean CFNotificationCenterIsSuspended(CFNotificationCenterRef center) {
+    return center->distributed ? _CFDistributedIsSuspended() : center->suspended;
+}

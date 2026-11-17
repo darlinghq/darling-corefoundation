@@ -66,6 +66,7 @@ set(cf_c_sources
 	CFMachPort.c
 	CFMessagePort.c
 	CFNotificationCenter.c
+	CFDistributedNotification.c
 	CFNumber.c
 	CFNumberFormatter.c
 	CFOldStylePList.c
