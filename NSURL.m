@@ -20,6 +20,9 @@
 #include <sys/statvfs.h>
 #include <sys/stat.h>
 #include <sys/xattr.h>
+#include <sys/attr.h>
+#include <sys/mount.h>
+#include <uuid/uuid.h>
 #include <dlfcn.h>
 #include <limits.h>
 
@@ -471,12 +474,184 @@ static Boolean CFURLSetExtensionIsHidden(CFURLRef url, Boolean hidden)
 
 static pthread_mutex_t resInfoLock = PTHREAD_MUTEX_INITIALIZER;
 
+// The volume a file URL's path is on: its statfs, and the name and UUID getattrlist gives for the mount point (an
+// empty name and a null UUID when it gives none). False for a non-file URL or a path that does not exist.
+static Boolean volumeInfoForURL(CFURLRef url, struct statfs *outStat, char *outName, size_t nameSize, uuid_t outUUID)
+{
+    UInt8 path[PATH_MAX] = { 0 };
+    struct attrlist request = { 0 };
+    struct
+    {
+        u_int32_t length;
+        attrreference_t name;
+        uuid_t uuid;
+        char names[NAME_MAX * 3 + 1];
+    } __attribute__((aligned(4), packed)) reply;
+
+    outName[0] = 0;
+    uuid_clear(outUUID);
+    if (!CFURLGetFileSystemRepresentation(url, true, path, PATH_MAX) || statfs((const char *)path, outStat) != 0)
+    {
+        return false;
+    }
+
+    request.bitmapcount = ATTR_BIT_MAP_COUNT;
+    request.volattr = ATTR_VOL_INFO | ATTR_VOL_NAME | ATTR_VOL_UUID;
+    if (getattrlist(outStat->f_mntonname, &request, &reply, sizeof(reply), 0) == 0)
+    {
+        const char *name = (const char *)&reply.name + reply.name.attr_dataoffset;
+        const char *end = (const char *)&reply + sizeof(reply);
+        if (reply.name.attr_length > 0 && name + reply.name.attr_length <= end)
+        {
+            strlcpy(outName, name, nameSize < reply.name.attr_length ? nameSize : reply.name.attr_length);
+        }
+        uuid_copy(outUUID, reply.uuid);
+    }
+    return true;
+}
+
+static Boolean isVolumeKey(CFStringRef key)
+{
+    static const CFStringRef *const keys[] = {
+        &kCFURLVolumeNameKey, &kCFURLVolumeLocalizedNameKey, &kCFURLVolumeUUIDStringKey,
+        &kCFURLVolumeIsRemovableKey, &kCFURLVolumeIsEjectableKey, &kCFURLVolumeIsReadOnlyKey,
+        &kCFURLVolumeIsLocalKey, &kCFURLVolumeIsInternalKey, &kCFURLVolumeIsBrowsableKey,
+        &kCFURLVolumeIsAutomountedKey, &kCFURLVolumeLocalizedFormatDescriptionKey, &kCFURLVolumeURLKey,
+        &kCFURLVolumeIdentifierKey, &kCFURLIsVolumeKey,
+    };
+    for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++)
+    {
+        if (CFEqual(key, *keys[i]))
+        {
+            return true;
+        }
+    }
+    return CFEqual(key, (CFStringRef)NSURLVolumeIsRootFileSystemKey) || CFEqual(key, (CFStringRef)NSURLVolumeTypeNameKey)
+        || CFEqual(key, (CFStringRef)NSURLVolumeSubtypeKey) || CFEqual(key, (CFStringRef)NSURLVolumeMountFromLocationKey);
+}
+
+static CFStringRef createVolumeFormatDescription(const struct statfs *st)
+{
+    if (strcmp(st->f_fstypename, "hfs") == 0)
+    {
+        return (st->f_flags & MNT_JOURNALED) ? CFSTR("Mac OS Extended (Journaled)") : CFSTR("Mac OS Extended");
+    }
+    if (strcmp(st->f_fstypename, "apfs") == 0)
+    {
+        return CFSTR("APFS");
+    }
+    return CFStringCreateWithCString(kCFAllocatorDefault, st->f_fstypename, kCFStringEncodingUTF8);
+}
+
+// The volume resource keys (isVolumeKey) for the volume that contains the URL's path. NULL for a URL that is not on
+// a volume, and for a key the volume has no value for.
+static CFTypeRef createVolumePropertyForKey(CFURLRef url, CFStringRef key)
+{
+    struct statfs st;
+    char name[NAME_MAX * 3 + 1];
+    uuid_t uuid;
+    Boolean removable, local;
+
+    if (!volumeInfoForURL(url, &st, name, sizeof(name), uuid))
+    {
+        return NULL;
+    }
+    removable = (st.f_flags & MNT_REMOVABLE) != 0;
+    local = (st.f_flags & MNT_LOCAL) != 0;
+
+    if (CFEqual(key, kCFURLVolumeNameKey) || CFEqual(key, kCFURLVolumeLocalizedNameKey))
+    {
+        return name[0] ? CFStringCreateWithCString(kCFAllocatorDefault, name, kCFStringEncodingUTF8) : NULL;
+    }
+    if (CFEqual(key, kCFURLVolumeUUIDStringKey))
+    {
+        uuid_string_t text;
+        if (uuid_is_null(uuid))
+        {
+            return NULL;
+        }
+        uuid_unparse_upper(uuid, text);
+        return CFStringCreateWithCString(kCFAllocatorDefault, text, kCFStringEncodingASCII);
+    }
+    // Ejectable is the same as removable: CoreFoundation does not ask DiskArbitration, and every removable volume
+    // Darling has is a disk image, which DiskArbitration reports as ejectable (as macOS does).
+    if (CFEqual(key, kCFURLVolumeIsRemovableKey) || CFEqual(key, kCFURLVolumeIsEjectableKey))
+    {
+        return removable ? kCFBooleanTrue : kCFBooleanFalse;
+    }
+    if (CFEqual(key, kCFURLVolumeIsReadOnlyKey))
+    {
+        return (st.f_flags & MNT_RDONLY) ? kCFBooleanTrue : kCFBooleanFalse;
+    }
+    if (CFEqual(key, kCFURLVolumeIsLocalKey))
+    {
+        return local ? kCFBooleanTrue : kCFBooleanFalse;
+    }
+    if (CFEqual(key, kCFURLVolumeIsInternalKey))
+    {
+        // macOS gives no value (nil) for a disk image's volume, and YES for its internal disk.
+        return (local && !removable) ? kCFBooleanTrue : NULL;
+    }
+    if (CFEqual(key, kCFURLVolumeIsBrowsableKey))
+    {
+        return (st.f_flags & MNT_DONTBROWSE) ? kCFBooleanFalse : kCFBooleanTrue;
+    }
+    if (CFEqual(key, (CFStringRef)NSURLVolumeIsRootFileSystemKey))
+    {
+        return (st.f_flags & MNT_ROOTFS) ? kCFBooleanTrue : kCFBooleanFalse;
+    }
+    if (CFEqual(key, kCFURLVolumeIsAutomountedKey))
+    {
+        return (st.f_flags & MNT_AUTOMOUNTED) ? kCFBooleanTrue : kCFBooleanFalse;
+    }
+    if (CFEqual(key, kCFURLVolumeLocalizedFormatDescriptionKey))
+    {
+        return createVolumeFormatDescription(&st);
+    }
+    if (CFEqual(key, (CFStringRef)NSURLVolumeTypeNameKey))
+    {
+        return CFStringCreateWithCString(kCFAllocatorDefault, st.f_fstypename, kCFStringEncodingUTF8);
+    }
+    if (CFEqual(key, (CFStringRef)NSURLVolumeSubtypeKey))
+    {
+        int subtype = (int)st.f_fssubtype;
+        return CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &subtype);
+    }
+    if (CFEqual(key, (CFStringRef)NSURLVolumeMountFromLocationKey))
+    {
+        const char *from = strncmp(st.f_mntfromname, "/dev/", 5) == 0 ? st.f_mntfromname + 5 : st.f_mntfromname;
+        return CFStringCreateWithCString(kCFAllocatorDefault, from, kCFStringEncodingUTF8);
+    }
+    if (CFEqual(key, kCFURLVolumeURLKey))
+    {
+        return CFURLCreateFromFileSystemRepresentation(kCFAllocatorDefault, (const UInt8 *)st.f_mntonname,
+            strlen(st.f_mntonname), true);
+    }
+    if (CFEqual(key, kCFURLVolumeIdentifierKey))
+    {
+        return CFDataCreate(kCFAllocatorDefault, (const UInt8 *)&st.f_fsid, sizeof(st.f_fsid));
+    }
+    if (CFEqual(key, kCFURLIsVolumeKey))
+    {
+        UInt8 path[PATH_MAX] = { 0 };
+        char resolved[PATH_MAX];
+        Boolean isVolume = CFURLGetFileSystemRepresentation(url, true, path, PATH_MAX)
+            && realpath((const char *)path, resolved) != NULL && strcmp(resolved, st.f_mntonname) == 0;
+        return isVolume ? kCFBooleanTrue : kCFBooleanFalse;
+    }
+    return NULL;
+}
+
 static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErrorRef *error)
 {
     CFTypeRef value = NULL;
     struct stat info;
     // NOTE: not all of the properties are currently supported, however the most common ones should have quasi-reasonable implementations
-    if (CFEqual(key, kCFURLNameKey))
+    if (isVolumeKey(key))
+    {
+        value = createVolumePropertyForKey(url, key);
+    }
+    else if (CFEqual(key, kCFURLNameKey))
     {
         // Key for the resource's name in the file system, returned as a CFString object. It is the last
         // path component as it is, extension included, and an item that is not there is a read error.
@@ -552,10 +727,6 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
         {
             resourceReadError(error);
         }
-    }
-    else if (CFEqual(key, kCFURLIsVolumeKey))
-    {
-        // is this doable?
     }
     else if (CFEqual(key, kCFURLIsPackageKey))
     {
@@ -684,10 +855,6 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
         // Key for the parent directory of the resource, returned as a CFURL object, or nil if the resource is the root directory of its volume.
         value = CFURLCreateCopyDeletingLastPathComponent(kCFAllocatorDefault, url);
     }
-    else if (CFEqual(key, kCFURLVolumeURLKey))
-    {
-        // is this doable?
-    }
     else if (CFEqual(key, kCFURLTypeIdentifierKey))
     {
         // Key for the resource’s uniform type identifier (UTI), returned as a CFString object.
@@ -729,10 +896,6 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
         // The value of this identifier is not persistent across system restarts.
         // Available in iOS 5.0 and later.
 
-    }
-    else if (CFEqual(key, kCFURLVolumeIdentifierKey))
-    {
-        
     }
     else if (CFEqual(key, kCFURLFileSizeKey))
     {
