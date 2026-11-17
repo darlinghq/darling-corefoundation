@@ -246,6 +246,14 @@ Boolean __CFPreferencesShouldWriteXML(void) {
 
 static CFLock_t domainCacheLock = CFLockInit;
 static CFMutableDictionaryRef  domainCache = NULL; // mutable
+static Boolean domainCacheExitHandlerInstalled = false;
+
+// Changes made with CFPreferencesSetAppValue() and friends are stored for the application even when it exits
+// before anything synchronizes them, as the preferences daemon does on macOS. Without a daemon the process
+// writes the changed domains itself when it exits normally.
+static void __CFPreferencesSynchronizeAtExit(void) {
+    _CFSynchronizeDomainCache();
+}
 
 // Public API
 
@@ -534,6 +542,10 @@ CFPreferencesDomainRef _CFPreferencesStandardDomain(CFStringRef  domainName, CFS
     if (!domainCache) {
         CFAllocatorRef alloc = __CFPreferencesAllocator();
         domainCache = CFDictionaryCreateMutable(alloc, 0, & kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    }
+    if (!domainCacheExitHandlerInstalled) {
+        domainCacheExitHandlerInstalled = true;
+        atexit(__CFPreferencesSynchronizeAtExit);
     }
     domain = (CFPreferencesDomainRef)CFDictionaryGetValue(domainCache, domainKey);
     __CFUnlock(&domainCacheLock);
