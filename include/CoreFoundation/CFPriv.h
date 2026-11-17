@@ -650,6 +650,10 @@ CF_EXPORT CFArrayRef CFDateFormatterCreateDateFormatsFromTemplates(CFAllocatorRe
 CF_EXPORT CFNotificationCenterRef CFNotificationCenterGetDistributedCenter(void);
 #endif
 
+// Whether notifications reach the observers of a process that has been suspended (an application that is inactive); see the distributed center.
+CF_EXPORT void CFNotificationCenterSetSuspended(CFNotificationCenterRef center, Boolean suspended);
+CF_EXPORT Boolean CFNotificationCenterIsSuspended(CFNotificationCenterRef center);
+
 CF_EXPORT const CFStringRef kCFNumberFormatterUsesCharacterDirection CF_AVAILABLE(10_9, 6_0);	// CFBoolean
 CF_EXPORT const CFStringRef kCFDateFormatterUsesCharacterDirection CF_AVAILABLE(10_9, 6_0);	// CFBoolean
 
