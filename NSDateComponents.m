@@ -284,7 +284,9 @@ typedef struct {
     parts->weekdayOrdinal = weekdayOrdinal;
 }
 
-// The components by unit, as Swift's Calendar and iOS 8's API read them.
+// The components by unit (NSDateComponents API since macOS 10.9). Units that are not a
+// component (calendar, time zone, week as of the macOS 10.14 behaviour) read as undefined and are
+// ignored when set, as on macOS.
 - (NSInteger)valueForComponent:(NSCalendarUnit)unit
 {
     switch (unit)
@@ -303,7 +305,7 @@ typedef struct {
         case NSCalendarUnitWeekOfYear: return [self weekOfYear];
         case NSCalendarUnitYearForWeekOfYear: return [self yearForWeekOfYear];
         case NSCalendarUnitNanosecond: return [self nanosecond];
-        default: return NSUndefinedDateComponent;
+        default: return NSDateComponentUndefined;
     }
 }
 
