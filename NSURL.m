@@ -1649,7 +1649,12 @@ CFURLRef CFURLCreateByResolvingBookmarkData(CFAllocatorRef allocator, CFDataRef 
     CFStringRef path = CFStringCreateWithBytes(allocator, bytes, len, kCFStringEncodingUTF8, false);
     if (path == NULL)
         return NULL;
-    CFURLRef url = CFURLCreateWithFileSystemPath(allocator, path, kCFURLPOSIXPathStyle, true);
+    // A directory resolves to a directory URL, anything else (also an item that is gone) to a file URL.
+    char fsPath[PATH_MAX];
+    struct stat info;
+    Boolean directory = CFStringGetFileSystemRepresentation(path, fsPath, sizeof(fsPath))
+        && stat(fsPath, &info) == 0 && S_ISDIR(info.st_mode);
+    CFURLRef url = CFURLCreateWithFileSystemPath(allocator, path, kCFURLPOSIXPathStyle, directory);
     CFRelease(path);
     if (isStale != NULL)
         *isStale = false;
