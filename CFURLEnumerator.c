@@ -30,6 +30,9 @@ struct __CFURLEnumerator {
     CFMutableArrayRef urlStack;
     CFMutableArrayRef dirFileInfos;
     Boolean pushedLastItem;
+    // The URL last returned. It follows the Get rule: the enumerator keeps it
+    // until the next call or until the enumerator goes away.
+    CFURLRef lastURL;
 };
 
 CFComparisonResult _compareFileInfo(const void *fileInfo1, const void *fileInfo2, void *context) {
@@ -52,6 +55,10 @@ static void __CFURLEnumeratorDeallocate(CFTypeRef cf) {
 
     if (enumerator->dirFileInfos) {
         CFRelease(enumerator->dirFileInfos);
+    }
+
+    if (enumerator->lastURL) {
+        CFRelease(enumerator->lastURL);
     }
 }
 
@@ -245,6 +252,11 @@ CFURLEnumeratorResult CFURLEnumeratorGetNextURL(CFURLEnumeratorRef enumer, CFURL
         *error = NULL;
     }
 
+    if (enumerator->lastURL != NULL) {
+        CFRelease(enumerator->lastURL);
+        enumerator->lastURL = NULL;
+    }
+
     CFIndex count = 0;
     CFDictionaryRef fileInfo = NULL;
     CFURLRef parent = NULL;
@@ -278,6 +290,7 @@ CFURLEnumeratorResult CFURLEnumeratorGetNextURL(CFURLEnumeratorRef enumer, CFURL
         return kCFURLEnumeratorError;
     }
 
+    enumerator->lastURL = item;
     if (url != NULL) {
         *url = item;
     }
@@ -301,10 +314,6 @@ CFURLEnumeratorResult CFURLEnumeratorGetNextURL(CFURLEnumeratorRef enumer, CFURL
         } else {
             result = kCFURLEnumeratorError;
         }
-    }
-
-    if (url == NULL) {
-        CFRelease(item);
     }
 
     return result;
