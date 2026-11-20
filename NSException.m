@@ -47,16 +47,6 @@ NSString *const NSRangeException = @"NSRangeException";
 NSString *const NSInvalidArgumentException = @"NSInvalidArgumentException";
 NSString *const NSInternalInconsistencyException = @"NSInternalInconsistencyException";
 NSString *const NSMallocException = @"NSMallocException";
-NSString *const NSObjectInaccessibleException = @"NSObjectInaccessibleException";
-NSString *const NSObjectNotAvailableException = @"NSObjectNotAvailableException";
-NSString *const NSDestinationInvalidException = @"NSDestinationInvalidException";
-NSString *const NSPortTimeoutException = @"NSPortTimeoutException";
-NSString *const NSInvalidSendPortException = @"NSInvalidSendPortException";
-NSString *const NSInvalidReceivePortException = @"NSInvalidReceivePortException";
-NSString *const NSPortSendException = @"NSPortSendException";
-NSString *const NSPortReceiveException = @"NSPortReceiveException";
-NSString *const NSCharacterConversionException = @"NSCharacterConversionException";
-NSString *const NSFileHandleOperationException = @"NSFileHandleOperationException";
 
 @implementation NSException
 

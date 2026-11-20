@@ -14,8 +14,6 @@
 
 #import "NSObjCRuntimeInternal.h"
 
-double NSFoundationVersionNumber = 1047.22;
-
 // NSGetSizeAndAlignment does not allow for debugging sizes, like
 // those emitted by method_getTypeEncoding, to occur in the type
 // declaration ("i8" compared to just "i"). However,
