@@ -13,6 +13,7 @@
 #import <CoreFoundation/CFDictionary.h>
 #import "CFInternal.h"
 #import "CFPriv.h"
+#import <CoreFoundation/CFURLPriv.h>
 #import "NSURLInternal.h"
 #import <CoreFoundation/CFFileSecurity.h>
 #import <objc/runtime.h>
@@ -274,12 +275,17 @@ static void CFURLLoadLaunchServices(void *context)
         dlError(&UTLoadError);
 }
 
+static void CFURLEnsureLaunchServices(void)
+{
+    static dispatch_once_t once;
+    dispatch_once_f(&once, NULL, CFURLLoadLaunchServices);
+}
+
 // Links, folders, directory types that are declared (.app) and files; a path with no extension
 // is public.data (public.unix-executable when executable).
 static CFStringRef CFURLCreateTypeIdentifier(CFURLRef url, CFErrorRef *error)
 {
-    static dispatch_once_t once;
-    dispatch_once_f(&once, NULL, CFURLLoadLaunchServices);
+    CFURLEnsureLaunchServices();
     if (UTCreatePreferredIdentifierForTag == NULL || UTConformsTo == NULL || UTTagClassFilenameExtension == NULL)
     {
         if (error != NULL && UTLoadError != NULL)
@@ -361,11 +367,12 @@ static CFTypeRef CFURLCreateContentType(CFURLRef url, CFErrorRef *error)
 }
 
 // The Finder flags live in bytes 8 and 9 (big endian) of the 32-byte "com.apple.FinderInfo"
-// extended attribute; kExtensionIsHidden is the 0x0010 bit of that word.
+// extended attribute; kExtensionIsHidden is the 0x0010 bit of that word and kHasBundle the 0x2000 bit.
 enum {
     kFinderInfoSize = 32,
     kFinderFlagsOffset = 8,
     kFinderExtensionIsHidden = 0x0010,
+    kFinderHasBundle = 0x2000,
 };
 
 // Reads the FinderInfo of the item itself (a symbolic link is not followed). Returns false
@@ -404,6 +411,38 @@ static Boolean CFURLCopyExtensionIsHidden(CFURLRef url, Boolean *hidden)
     }
     *hidden = (((info[kFinderFlagsOffset] << 8) | info[kFinderFlagsOffset + 1]) & kFinderExtensionIsHidden) != 0;
     return true;
+}
+
+// The provider LaunchServices registers to answer kCFURLIsPackageKey from its type registry.
+static _CFURLPackageProvider CFURLPackageProvider;
+
+void _CFURLSetPackageProvider(_CFURLPackageProvider provider)
+{
+    __atomic_store_n(&CFURLPackageProvider, provider, __ATOMIC_RELEASE);
+}
+
+// Whether an existing directory is a package. The Finder's bundle bit makes any directory one.
+// Everything else depends on the directory's type (an extension declared as conforming to
+// com.apple.package, or a document type declared as a package), which only LaunchServices knows.
+// As on macOS, where a program that links only CoreFoundation gets LaunchServices loaded on its
+// first package question, LaunchServices is loaded here if nothing has registered yet; it
+// registers its provider when it loads. Without it, only the bundle bit counts.
+static Boolean CFURLDirectoryIsPackage(CFURLRef url)
+{
+    UInt8 info[kFinderInfoSize];
+
+    if (CFURLReadFinderInfo(url, info) && (((info[kFinderFlagsOffset] << 8) | info[kFinderFlagsOffset + 1]) & kFinderHasBundle) != 0)
+    {
+        return true;
+    }
+
+    _CFURLPackageProvider provider = __atomic_load_n(&CFURLPackageProvider, __ATOMIC_ACQUIRE);
+    if (provider == NULL)
+    {
+        CFURLEnsureLaunchServices();
+        provider = __atomic_load_n(&CFURLPackageProvider, __ATOMIC_ACQUIRE);
+    }
+    return provider != NULL && provider(url);
 }
 
 // Sets or clears the extension-hidden flag, leaving the rest of the FinderInfo as it is.
@@ -500,7 +539,16 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
     }
     else if (CFEqual(key, kCFURLIsPackageKey))
     {
-        // is this doable?
+        // Key for whether the resource is a package: a directory (a symbolic link is not one)
+        // that is presented as a single file. Returned as a CFBoolean object.
+        if (CFURLStat(url, &info))
+        {
+            value = (S_ISDIR(info.st_mode) && CFURLDirectoryIsPackage(url)) ? kCFBooleanTrue : kCFBooleanFalse;
+        }
+        else
+        {
+            resourceReadError(error);
+        }
     }
     else if (CFEqual(key, kCFURLIsSystemImmutableKey))
     {
