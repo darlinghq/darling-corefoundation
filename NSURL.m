@@ -478,17 +478,39 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
     // NOTE: not all of the properties are currently supported, however the most common ones should have quasi-reasonable implementations
     if (CFEqual(key, kCFURLNameKey))
     {
-        //Key for the resource’s name in the file system, returned as a CFString object.
-        CFURLRef trimmed = CFURLCreateCopyDeletingPathExtension(kCFAllocatorDefault, url);
-        value = CFURLCopyLastPathComponent(trimmed);
-        CFRelease(trimmed);
+        // Key for the resource's name in the file system, returned as a CFString object. It is the last
+        // path component as it is, extension included, and an item that is not there is a read error.
+        if (CFURLStat(url, &info))
+        {
+            value = CFURLCopyLastPathComponent(url);
+        }
+        else
+        {
+            resourceReadError(error);
+        }
     }
     else if (CFEqual(key, kCFURLLocalizedNameKey))
     {
-        // Key for the resource’s localized or extension-hidden name, retuned as a CFString object.
-        CFURLRef trimmed = CFURLCreateCopyDeletingPathExtension(kCFAllocatorDefault, url);
-        value = CFURLCopyLastPathComponent(trimmed); // this should be localized
-        CFRelease(trimmed);
+        // Key for the resource's localized or extension-hidden name, returned as a CFString object: the file
+        // name, without its extension when the item has the extension-hidden flag set.
+        if (CFURLStat(url, &info))
+        {
+            Boolean hidden = false;
+            if (CFURLCopyExtensionIsHidden(url, &hidden) && hidden)
+            {
+                CFURLRef trimmed = CFURLCreateCopyDeletingPathExtension(kCFAllocatorDefault, url);
+                value = CFURLCopyLastPathComponent(trimmed);
+                CFRelease(trimmed);
+            }
+            else
+            {
+                value = CFURLCopyLastPathComponent(url);
+            }
+        }
+        else
+        {
+            resourceReadError(error);
+        }
     }
     else if (CFEqual(key, kCFURLPathKey))
     {
