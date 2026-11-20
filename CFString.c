@@ -41,6 +41,9 @@
 #include "CFInternal.h"
 #if DEPLOYMENT_TARGET_MACOSX || DEPLOYMENT_TARGET_EMBEDDED || DEPLOYMENT_TARGET_EMBEDDED_MINI || DEPLOYMENT_TARGET_WINDOWS || DEPLOYMENT_TARGET_LINUX
 #include "CFLocaleInternal.h"
+#include "CFStringLocalizedFormat.h"
+#include <unicode/uloc.h>
+#include <unicode/upluralrules.h>
 #endif
 #include <stdarg.h>
 #include <stdio.h>
@@ -5440,6 +5443,8 @@ typedef struct {
     int8_t widthArgNum;
     int8_t configDictIndex;
     int8_t numericFormatStyle;        // Only set for localizable numeric quantities
+    int16_t configValueType;          // type and size of a %#@variable@'s argument (configDictIndex != -1)
+    int16_t configValueSize;
     SInt32 specLoc;                   // whole '%...' specifier in the format; specLen is 0 for literal chunks
     SInt32 specLen;
 } CFFormatSpec;
@@ -5952,6 +5957,107 @@ void CFStringAppendFormatAndArguments(CFMutableStringRef outputString, CFDiction
     }}
 #endif
 
+// .stringsdict variables. A %#@name@ specifier stands for the entry "name" of the
+// configuration (the .stringsdict entry of the format string). Only plural rule
+// variables are supported: NSStringFormatSpecTypeKey NSStringPluralRuleType, an
+// NSStringFormatValueTypeKey with the printf conversion of the argument (e.g. "lu"),
+// and one format per plural category (zero, one, two, few, many, other). The format
+// chosen for the argument is then formatted with the arguments from that one on.
+
+// Marks spec as the variable key of config when it is a supported plural rule variable.
+static void __CFStringFormatSetVariable(CFFormatSpec *spec, CFStringRef key, CFDictionaryRef config, CFDictionaryRef *configs, CFIndex *numConfigs) {
+    if (!config || *numConfigs >= INT8_MAX) return;
+    CFDictionaryRef variable = (CFDictionaryRef)CFDictionaryGetValue(config, key);
+    if (!variable || CFGetTypeID(variable) != CFDictionaryGetTypeID()) return;
+    CFStringRef ruleType = (CFStringRef)CFDictionaryGetValue(variable, CFSTR("NSStringFormatSpecTypeKey"));
+    if (!ruleType || CFGetTypeID(ruleType) != CFStringGetTypeID() || !CFEqual(ruleType, CFSTR("NSStringPluralRuleType"))) return;
+    CFStringRef valueType = (CFStringRef)CFDictionaryGetValue(variable, CFSTR("NSStringFormatValueTypeKey"));
+    if (!valueType || CFGetTypeID(valueType) != CFStringGetTypeID()) return;
+    CFIndex length = CFStringGetLength(valueType);
+    UniChar conversion[16];
+    if (length < 1 || length >= (CFIndex)(sizeof(conversion) / sizeof(conversion[0]))) return;
+    conversion[0] = '%';
+    CFStringGetCharacters(valueType, CFRangeMake(0, length), conversion + 1);
+    CFFormatSpec valueSpec;
+    memset(&valueSpec, 0, sizeof(valueSpec));
+    valueSpec.widthArg = valueSpec.precArg = -1;
+    valueSpec.mainArgNum = valueSpec.precArgNum = valueSpec.widthArgNum = valueSpec.configDictIndex = -1;
+    SInt32 index = 1;
+    __CFParseFormatSpec(conversion, NULL, &index, (SInt32)length + 1, &valueSpec, NULL);
+    if (index != length + 1 || (valueSpec.type != CFFormatLongType && valueSpec.type != CFFormatDoubleType)) return;
+    spec->configValueType = valueSpec.type;
+    spec->configValueSize = valueSpec.size;
+    spec->configDictIndex = (int8_t)*numConfigs;
+    configs[(*numConfigs)++] = variable;
+}
+
+// The format of variable for the plural category of value, or NULL.
+static CFStringRef __CFStringCopyVariableFormat(CFDictionaryRef variable, const CFPrintValue *value, CFDictionaryRef formatOptions) {
+    double number;
+    if (value->type == CFFormatDoubleType) {
+#if LONG_DOUBLE_SUPPORT
+        if (CFFormatSize16 == value->size) number = (double)value->value.longDoubleValue; else
+#endif
+        number = value->value.doubleValue;
+    } else {
+        number = (double)value->value.int64Value;
+    }
+
+    CFStringRef format = NULL;
+    // QUIRK: the "zero" format is used for 0 in every language, including those (such as
+    // English) whose plural rules have no zero category. Evidence: black-box observation on
+    // macOS 26.7.3 and Mac OS X 10.14.4 (tier 2). Test: tests/StringsDictPluralFormat.m
+    // ("zero category in English").
+    if (number == 0) format = (CFStringRef)CFDictionaryGetValue(variable, CFSTR("zero"));
+    if (!format || CFGetTypeID(format) != CFStringGetTypeID()) {
+        format = NULL;
+        // QUIRK: without a locale the plural rules are English ones, whatever the current locale
+        // or the localization the string came from. Evidence: black-box observation on
+        // macOS 26.7.3 and Mac OS X 10.14.4 with -AppleLocale fr_FR and a French-only bundle
+        // (tier 2). Test: tests/StringsDictPluralFormat.m ("no locale: English rules").
+        char localeID[ULOC_FULLNAME_CAPACITY] = "en";
+        if (formatOptions && CFGetTypeID(formatOptions) == CFLocaleGetTypeID()) {
+            CFStringRef identifier = CFLocaleGetIdentifier((CFLocaleRef)formatOptions);
+            if (!identifier || !CFStringGetCString(identifier, localeID, sizeof(localeID), kCFStringEncodingASCII)) strlcpy(localeID, "en", sizeof(localeID));
+        }
+        UErrorCode status = U_ZERO_ERROR;
+        UPluralRules *rules = uplrules_open(localeID, &status);
+        if (U_SUCCESS(status)) {
+            UChar keyword[32];
+            int32_t keywordLength = uplrules_select(rules, number, keyword, (int32_t)(sizeof(keyword) / sizeof(keyword[0])), &status);
+            if (U_SUCCESS(status) && keywordLength > 0 && keywordLength < (int32_t)(sizeof(keyword) / sizeof(keyword[0]))) {
+                CFStringRef category = CFStringCreateWithCharacters(kCFAllocatorSystemDefault, (const UniChar *)keyword, keywordLength);
+                format = (CFStringRef)CFDictionaryGetValue(variable, category);
+                CFRelease(category);
+            }
+        }
+        if (rules) uplrules_close(rules);
+    }
+    if (!format || CFGetTypeID(format) != CFStringGetTypeID()) format = (CFStringRef)CFDictionaryGetValue(variable, CFSTR("other"));
+    if (!format || CFGetTypeID(format) != CFStringGetTypeID()) return NULL;
+    return (CFStringRef)CFRetain(format);
+}
+
+// A nested format (a .stringsdict variable's) takes its arguments from the values
+// already read for the outer format, as the type the nested format asks for.
+static void __CFStringFormatTakeOriginalValue(CFPrintValue *value, const CFPrintValue *original) {
+    if (0 == value->type || value->type == original->type) {
+        int16_t type = value->type ? value->type : original->type, size = value->type ? value->size : original->size;
+        *value = *original;
+        value->type = type;
+        value->size = size;
+        return;
+    }
+    if (value->type == CFFormatDoubleType && original->type == CFFormatLongType) {
+        value->value.doubleValue = (double)original->value.int64Value;
+        value->size = 0;
+    } else if (value->type == CFFormatLongType && original->type == CFFormatDoubleType) {
+        value->value.int64Value = (int64_t)original->value.doubleValue;
+    } else {
+        value->value = original->value;
+    }
+}
+
 CONST_STRING_DECL(_kCFStringFormatMetadataReplacementIndexKey, "Index")
 CONST_STRING_DECL(_kCFStringFormatMetadataSpecifierRangeLocationInFormatStringKey, "SpecLocation")
 CONST_STRING_DECL(_kCFStringFormatMetadataSpecifierRangeLengthInFormatStringKey, "SpecLength")
@@ -5976,7 +6082,7 @@ static void __CFStringFormatAppendMetadata(CFMutableArrayRef metadata, const CFF
     if (spec->type != CFFormatLiteralType && spec->mainArgNum >= 0) {
         __CFStringFormatSetIndex(entry, _kCFStringFormatMetadataReplacementIndexKey, spec->mainArgNum + 1);
         const void *object = values[spec->mainArgNum].value.pointerValue;
-        if (spec->type == CFFormatCFType && object) CFDictionarySetValue(entry, _kCFStringFormatMetadataArgumentObjectKey, object);
+        if (spec->type == CFFormatCFType && spec->configDictIndex == -1 && object) CFDictionarySetValue(entry, _kCFStringFormatMetadataArgumentObjectKey, object);
     }
     CFArrayAppendValue(metadata, entry);
     CFRelease(entry);
@@ -6021,6 +6127,7 @@ static void __CFStringAppendFormatCore(CFMutableStringRef outputString, CFString
 
 
     formatLen = CFStringGetLength(formatString);
+    if (!stringsDictConfig) stringsDictConfig = __CFStringGetLocalizedFormatConfiguration(formatString);
     if (!CF_IS_OBJC(__kCFStringTypeID, formatString)) {
         __CFAssertIsString(formatString);
         if (!__CFStrIsUnicode(formatString)) {
@@ -6063,6 +6170,8 @@ static void __CFStringAppendFormatCore(CFMutableStringRef outputString, CFString
 	specs[curSpec].precArgNum = -1;
 	specs[curSpec].widthArgNum = -1;
 	specs[curSpec].configDictIndex = -1;
+	specs[curSpec].configValueType = 0;
+	specs[curSpec].configValueSize = 0;
 	specs[curSpec].specLoc = formatIdx;
 	specs[curSpec].specLen = 0;
         if (cformat) {
@@ -6077,6 +6186,10 @@ static void __CFStringAppendFormatCore(CFMutableStringRef outputString, CFString
 	    CFStringRef configKey = NULL;
 	    newFmtIdx++;	/* Skip % */
 	    __CFParseFormatSpec(uformat, cformat, &newFmtIdx, formatLen, &(specs[curSpec]), &configKey);
+	    if (configKey) {
+		__CFStringFormatSetVariable(&specs[curSpec], configKey, stringsDictConfig, configs, &numConfigs);
+		CFRelease(configKey);
+	    }
 	    specs[curSpec].specLen = newFmtIdx - formatIdx;
             if (CFFormatLiteralType == specs[curSpec].type) {
 		specs[curSpec].loc = formatIdx + 1;
@@ -6138,8 +6251,13 @@ static void __CFStringAppendFormatCore(CFMutableStringRef outputString, CFString
 	    specs[curSpec].mainArgNum = argNum++;
 	}
 
-	values[specs[curSpec].mainArgNum].size = specs[curSpec].size;
-	values[specs[curSpec].mainArgNum].type = specs[curSpec].type;
+	if (-1 != specs[curSpec].configDictIndex) {
+	    values[specs[curSpec].mainArgNum].size = specs[curSpec].configValueSize;
+	    values[specs[curSpec].mainArgNum].type = specs[curSpec].configValueType;
+	} else {
+	    values[specs[curSpec].mainArgNum].size = specs[curSpec].size;
+	    values[specs[curSpec].mainArgNum].type = specs[curSpec].type;
+	}
 
 
 	if (-1 != specs[curSpec].widthArgNum) {
@@ -6154,7 +6272,10 @@ static void __CFStringAppendFormatCore(CFMutableStringRef outputString, CFString
 
     /* Collect the arguments in correct type from vararg list */
     for (argNum = 0; argNum < sizeArgNum; argNum++) {
-	if ((NULL != originalValues) && (0 == values[argNum].type)) values[argNum] = originalValues[argNum];
+	if (NULL != originalValues) {
+	    __CFStringFormatTakeOriginalValue(&values[argNum], &originalValues[argNum]);
+	    continue;
+	}
 	switch (values[argNum].type) {
 	case 0:
 	case CFFormatLiteralType:
@@ -6414,113 +6535,15 @@ static void __CFStringAppendFormatCore(CFMutableStringRef outputString, CFString
             break;
 	case CFFormatCFType:
 	case CFFormatObjectType:
-	    if (specs[curSpec].configDictIndex != -1) { // config dict
-		CFTypeRef object = NULL;
-		switch (values[specs[curSpec].mainArgNum].type) {
-		    case CFFormatLongType:
-			object = CFNumberCreate(tmpAlloc, kCFNumberSInt64Type, &(values[specs[curSpec].mainArgNum].value.int64Value));
-			break;
-			
-		    case CFFormatDoubleType:
-#if LONG_DOUBLE_SUPPORT
-			if (CFFormatSize16 == values[specs[curSpec].mainArgNum].size) {
-			    double aValue = values[specs[curSpec].mainArgNum].value.longDoubleValue; // losing precision
-
-			    object = CFNumberCreate(tmpAlloc, kCFNumberDoubleType, &aValue);
-			} else
-#endif
-			{
-			    object = CFNumberCreate(tmpAlloc, kCFNumberDoubleType, &(values[specs[curSpec].mainArgNum].value.doubleValue));
-			}
-			break;
-
-		    case CFFormatPointerType:
-			object = CFNumberCreate(tmpAlloc, kCFNumberCFIndexType, &(values[specs[curSpec].mainArgNum].value.pointerValue));
-			break;
-
-		    case CFFormatPascalCharsType:
-		    case CFFormatCharsType:
-			if (NULL != values[specs[curSpec].mainArgNum].value.pointerValue) {
-			    CFMutableStringRef aString = CFStringCreateMutable(tmpAlloc, 0);
-			    int len;
-			    const char *str = (const char *)values[specs[curSpec].mainArgNum].value.pointerValue;
-			    if (specs[curSpec].type == CFFormatPascalCharsType) {	// Pascal string case
-				len = ((unsigned char *)str)[0];
-				str++;
-				if (hasPrecision && precision < len) len = precision;
-			    } else {	// C-string case
-				if (!hasPrecision) {	// No precision, so rely on the terminating null character
-				    len = strlen(str);
-				} else {	// Don't blindly call strlen() if there is a precision; the string might not have a terminating null (3131988)
-				    const char *terminatingNull = (const char *)memchr(str, 0, precision);	// Basically strlen() on only the first precision characters of str
-				    if (terminatingNull) {	// There was a null in the first precision characters
-					len = terminatingNull - str;
-				    } else {
-					len = precision;
-				    }
-				}
-			    }
-			    // Since the spec says the behavior of the ' ', '0', '#', and '+' flags is undefined for
-			    // '%s', and since we have ignored them in the past, the behavior is hereby cast in stone
-			    // to ignore those flags (and, say, never pad with '0' instead of space).
-			    if (specs[curSpec].flags & kCFStringFormatMinusFlag) {
-				__CFStringAppendBytes(aString, str, len, __CFStringGetSystemEncoding());
-				if (hasWidth && width > len) {
-				    int w = width - len;	// We need this many spaces; do it ten at a time
-				    do {__CFStringAppendBytes(aString, "          ", (w > 10 ? 10 : w), kCFStringEncodingASCII);} while ((w -= 10) > 0);
-				}
-			    } else {
-				if (hasWidth && width > len) {
-				    int w = width - len;	// We need this many spaces; do it ten at a time
-				    do {__CFStringAppendBytes(aString, "          ", (w > 10 ? 10 : w), kCFStringEncodingASCII);} while ((w -= 10) > 0);
-				}
-				__CFStringAppendBytes(aString, str, len, __CFStringGetSystemEncoding());
-			    }
-
-			    object = aString;
-			}
-			break;
-
-		    case CFFormatSingleUnicharType:
-			ch = (UniChar)values[specs[curSpec].mainArgNum].value.int64Value;
-			object = CFStringCreateWithCharactersNoCopy(tmpAlloc, &ch, 1, kCFAllocatorNull);
-			break;
-
-		    case CFFormatUnicharsType:
-			//??? need to handle width, precision, and padding arguments
-			up = (UniChar *)values[specs[curSpec].mainArgNum].value.pointerValue;
-			if (NULL != up) {
-			    CFMutableStringRef aString = CFStringCreateMutable(tmpAlloc, 0);
-			    int len;
-			    for (len = 0; 0 != up[len]; len++);
-			    // Since the spec says the behavior of the ' ', '0', '#', and '+' flags is undefined for
-			    // '%s', and since we have ignored them in the past, the behavior is hereby cast in stone
-			    // to ignore those flags (and, say, never pad with '0' instead of space).
-			    if (hasPrecision && precision < len) len = precision;
-			    if (specs[curSpec].flags & kCFStringFormatMinusFlag) {
-				CFStringAppendCharacters(aString, up, len);
-				if (hasWidth && width > len) {
-				    int w = width - len;	// We need this many spaces; do it ten at a time
-				    do {__CFStringAppendBytes(aString, "          ", (w > 10 ? 10 : w), kCFStringEncodingASCII);} while ((w -= 10) > 0);
-				}
-			    } else {
-				if (hasWidth && width > len) {
-				    int w = width - len;	// We need this many spaces; do it ten at a time
-				    do {__CFStringAppendBytes(aString, "          ", (w > 10 ? 10 : w), kCFStringEncodingASCII);} while ((w -= 10) > 0);
-				}
-				CFStringAppendCharacters(aString, up, len);
-			    }
-			    object = aString;
-			}
-			break;
-
-		    case CFFormatCFType:
-		    case CFFormatObjectType:
-			if (NULL != values[specs[curSpec].mainArgNum].value.pointerValue) object = CFRetain(values[specs[curSpec].mainArgNum].value.pointerValue);
-			break;
+	    if (specs[curSpec].configDictIndex != -1) { // a %#@variable@ of a .stringsdict entry
+		CFStringRef variableFormat = __CFStringCopyVariableFormat(configs[specs[curSpec].configDictIndex], &values[specs[curSpec].mainArgNum], formatOptions);
+		if (variableFormat) {
+		    // The variable's format takes its arguments from this specifier's argument on.
+		    va_list variableArgs;
+		    va_copy(variableArgs, copiedArgs);
+		    __CFStringAppendFormatCore(outputString, copyDescFunc, contextDescFunc, formatOptions, stringsDictConfig, variableFormat, specs[curSpec].mainArgNum, originalValues, originalValuesSize, variableArgs, NULL);
+		    CFRelease(variableFormat);
 		}
-
-		if (NULL != object) CFRelease(object);
 
 	    } else if (NULL != values[specs[curSpec].mainArgNum].value.pointerValue) {
                 CFStringRef str = NULL;

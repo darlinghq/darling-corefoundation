@@ -33,6 +33,7 @@
 
 #include <CoreFoundation/CFPreferences.h>
 #include <CoreFoundation/CFURLAccess.h>
+#include "CFStringLocalizedFormat.h"
 
 #pragma mark -
 #pragma mark Localized Strings
@@ -76,16 +77,14 @@ static CFDictionaryRef _CFBundleCopyLocTableStrings(CFBundleRef bundle, CFString
 // returns an empty dictionary for a missing table. Neither is documented. Evidence: black-box
 // observation on macOS 27, arm64 (tier 2), vd-upstream/mac-probes/cf-loctable-loader.m.
 // Test: tests/BundleLocTable.m (loctable precedence, missing table).
-CF_EXPORT CFDictionaryRef CFBundleCopyLocalizedStringTableForLocalization(CFBundleRef bundle, CFStringRef tableName, CFStringRef localizationName) {
-    CFDictionaryRef stringTable = NULL;
+// The dictionary in the <tableName>.<type> resource of one localization (NULL: the bundle's language search list), or NULL.
+static CFDictionaryRef _CFBundleCopyTableResource(CFBundleRef bundle, CFStringRef tableName, CFStringRef type, CFStringRef localizationName) {
+    CFDictionaryRef table = NULL;
     CFURLRef tableURL = NULL;
-    if (!tableName || CFEqual(tableName, CFSTR(""))) tableName = _CFBundleDefaultStringTableName;
-    stringTable = _CFBundleCopyLocTableStrings(bundle, tableName, localizationName);
-    if (stringTable) return stringTable;
     if (localizationName) {
-        tableURL = CFBundleCopyResourceURLForLocalization(bundle, tableName, _CFBundleStringTableType, NULL, localizationName);
+        tableURL = CFBundleCopyResourceURLForLocalization(bundle, tableName, type, NULL, localizationName);
     } else {
-        tableURL = CFBundleCopyResourceURL(bundle, tableName, _CFBundleStringTableType, NULL);
+        tableURL = CFBundleCopyResourceURL(bundle, tableName, type, NULL);
     }
 
     if (tableURL) {
@@ -96,19 +95,65 @@ CF_EXPORT CFDictionaryRef CFBundleCopyLocalizedStringTableForLocalization(CFBund
         if (CFURLCreateDataAndPropertiesFromResource(kCFAllocatorSystemDefault, tableURL, &tableData, NULL, NULL, &errCode)) {
 #pragma GCC diagnostic pop
             CFErrorRef error = NULL;
-            stringTable = (CFDictionaryRef)CFPropertyListCreateWithData(CFGetAllocator(bundle), tableData, kCFPropertyListImmutable, NULL, &error);
-            if (stringTable && CFDictionaryGetTypeID() != CFGetTypeID(stringTable)) {
-                CFRelease(stringTable);
-                stringTable = NULL;
+            table = (CFDictionaryRef)CFPropertyListCreateWithData(CFGetAllocator(bundle), tableData, kCFPropertyListImmutable, NULL, &error);
+            if (table && CFDictionaryGetTypeID() != CFGetTypeID(table)) {
+                CFRelease(table);
+                table = NULL;
             }
-            if (!stringTable && error) {
-                CFLog(kCFLogLevelError, CFSTR("Unable to load string table file: %@ / %@: %@"), bundle, tableName, error);
-                CFRelease(error);
+            if (!table && error) {
+                CFLog(kCFLogLevelError, CFSTR("Unable to load string table file: %@ / %@.%@: %@"), bundle, tableName, type, error);
             }
+            if (error) CFRelease(error);
             CFRelease(tableData);
         }
         CFRelease(tableURL);
     }
+    return table;
+}
+
+static void _CFBundleMergeStringsDictEntry(const void *key, const void *value, void *context) {
+    CFMutableDictionaryRef table = (CFMutableDictionaryRef)context;
+    if (CFGetTypeID(key) != CFStringGetTypeID()) return;
+    if (CFGetTypeID(value) == CFStringGetTypeID()) {
+        CFDictionarySetValue(table, key, value);
+    } else if (CFGetTypeID(value) == CFDictionaryGetTypeID()) {
+        CFStringRef format = (CFStringRef)CFDictionaryGetValue((CFDictionaryRef)value, CFSTR("NSStringLocalizedFormatKey"));
+        if (!format || CFGetTypeID(format) != CFStringGetTypeID()) return;
+        CFStringRef string = __CFStringCreateLocalizedFormat(format, (CFDictionaryRef)value);
+        if (string) {
+            CFDictionarySetValue(table, key, string);
+            CFRelease(string);
+        }
+    }
+}
+
+// The strings table of one localization (NULL: the bundle's language search list); never NULL, an empty dictionary stands for "no table".
+// A <table>.loctable is consulted before <table>.strings, and a NULL or empty table name means Localizable.
+// The entries of a <table>.stringsdict take precedence over the <table>.strings entries with the same key.
+// An entry with an NSStringLocalizedFormatKey becomes a string with that format which carries the whole
+// entry, so that formatting it expands its %#@variable@ specifiers.
+// QUIRK: macOS prefers the .loctable entry over a <table>.strings file of the same name, and
+// returns an empty dictionary for a missing table. Neither is documented. Evidence: black-box
+// observation on macOS 27, arm64 (tier 2), vd-upstream/mac-probes/cf-loctable-loader.m.
+// Test: tests/BundleLocTable.m (loctable precedence, missing table).
+CF_EXPORT CFDictionaryRef CFBundleCopyLocalizedStringTableForLocalization(CFBundleRef bundle, CFStringRef tableName, CFStringRef localizationName) {
+    CFDictionaryRef stringTable = NULL;
+    if (!tableName || CFEqual(tableName, CFSTR(""))) tableName = _CFBundleDefaultStringTableName;
+    stringTable = _CFBundleCopyLocTableStrings(bundle, tableName, localizationName);
+    if (stringTable) return stringTable;
+    stringTable = _CFBundleCopyTableResource(bundle, tableName, _CFBundleStringTableType, localizationName);
+
+    CFDictionaryRef stringsDict = _CFBundleCopyTableResource(bundle, tableName, _CFBundleStringDictTableType, localizationName);
+    if (stringsDict) {
+        CFMutableDictionaryRef merged = stringTable
+            ? CFDictionaryCreateMutableCopy(CFGetAllocator(bundle), 0, stringTable)
+            : CFDictionaryCreateMutable(CFGetAllocator(bundle), 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        CFDictionaryApplyFunction(stringsDict, _CFBundleMergeStringsDictEntry, merged);
+        CFRelease(stringsDict);
+        if (stringTable) CFRelease(stringTable);
+        stringTable = merged;
+    }
+
     if (!stringTable) stringTable = CFDictionaryCreate(CFGetAllocator(bundle), NULL, NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     return stringTable;
 }
