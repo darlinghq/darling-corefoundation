@@ -106,9 +106,18 @@ static void cocoaError(CFErrorRef *error, CFIndex code, CFURLRef url, CFStringRe
     }
 }
 
-static void posixError(CFErrorRef *error, CFURLRef url, CFStringRef path) {
+// A directory that cannot be read is reported as a Cocoa file reading error with the POSIX error
+// underneath: no permission (257) for EACCES and EPERM, no such file (260) for ENOENT, and the
+// unknown read error (256) for anything else, including ENOTDIR.
+static void readError(CFErrorRef *error, CFURLRef url, CFStringRef path) {
     if (error) {
         int saved_errno = errno;
+        CFIndex code = 256; // NSFileReadUnknownError
+        if (saved_errno == ENOENT) {
+            code = 260; // NSFileReadNoSuchFileError
+        } else if (saved_errno == EACCES || saved_errno == EPERM) {
+            code = 257; // NSFileReadNoPermissionError
+        }
         const CFStringRef keys[3] = {
             kCFErrorUnderlyingErrorKey,
             NSURLErrorKey,
@@ -121,7 +130,7 @@ static void posixError(CFErrorRef *error, CFURLRef url, CFStringRef path) {
             url,
             path,
         };
-        *error = CFErrorCreateWithUserInfoKeysAndValues(kCFAllocatorDefault, kCFErrorDomainPOSIX, saved_errno, (const void *const *)keys, (const void *const *)values, 3);
+        *error = CFErrorCreateWithUserInfoKeysAndValues(kCFAllocatorDefault, kCFErrorDomainCocoa, code, (const void *const *)keys, (const void *const *)values, 3);
         CFRelease(underlyingError);
     }
 }
@@ -145,7 +154,7 @@ static CFIndex CFURLEnumeratorPushURL(CFURLEnumeratorRef enumerator, CFURLRef ur
 
     DIR *dir = opendir(path);
     if (dir == NULL) {
-        posixError(error, url, urlPath);
+        readError(error, url, urlPath);
         CFRelease(urlPath);
         return kCFNotFound;
     }

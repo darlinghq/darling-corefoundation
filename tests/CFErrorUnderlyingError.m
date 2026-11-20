@@ -47,11 +47,6 @@ static void check_error_with_underlying(const char *label, CFErrorRef error, CFS
         CFRelease(userInfo);
 }
 
-static void check_posix_error(const char *label, CFErrorRef error, CFIndex expectedErrno)
-{
-    check_error_with_underlying(label, error, kCFErrorDomainPOSIX, expectedErrno, expectedErrno);
-}
-
 static void check_url_resource_error(NSString *base)
 {
     NSURL *missing = [NSURL fileURLWithPath:[base stringByAppendingPathComponent:@"missing"]];
@@ -75,7 +70,7 @@ static void check_enumerator_error(NSString *base)
         return;
     }
 
-    CFURLEnumeratorRef enumerator = CFURLEnumeratorCreateForDirectoryURL(kCFAllocatorDefault, (CFURLRef)[NSURL fileURLWithPath:base], kCFURLEnumeratorDefaultBehavior, NULL);
+    CFURLEnumeratorRef enumerator = CFURLEnumeratorCreateForDirectoryURL(kCFAllocatorDefault, (CFURLRef)[NSURL fileURLWithPath:base], kCFURLEnumeratorDescendRecursively, NULL);
     check_result("enumerator: created for the base directory", enumerator != NULL);
     CFErrorRef error = NULL;
     CFURLEnumeratorResult result = kCFURLEnumeratorEnd;
@@ -86,7 +81,8 @@ static void check_enumerator_error(NSString *base)
             break;
     }
     check_result("enumerator: unreadable directory reports an error", result == kCFURLEnumeratorError);
-    check_posix_error("enumerator unreadable directory", error, EACCES);
+    // NSFileReadNoPermissionError (257) with the POSIX error underneath.
+    check_error_with_underlying("enumerator unreadable directory", error, kCFErrorDomainCocoa, 257, EACCES);
     if (error != NULL)
         CFRelease(error);
     if (enumerator != NULL)
