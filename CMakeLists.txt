@@ -170,6 +170,7 @@ set(cf_sources
 	NSSharedKeyDictionary.m
 	NSSharedKeySet.m
 	NSStream.m
+	CFStringLocalizedFormat.m
 	NSString.m
 	NSTimer.m
 	NSTimeZone.m
