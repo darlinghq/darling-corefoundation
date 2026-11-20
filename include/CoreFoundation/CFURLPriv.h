@@ -664,6 +664,15 @@ typedef CF_ENUM(CFIndex, CFURLBookmarkMatchResult) {
     kCFURLBookmarkComparisonExactMatch      = 0x0000f000    /* the two bookmarks are identical */
 }; // Available 10_7, NA.
 
+/*
+ Darling-private, not an Apple API: LaunchServices registers a provider when it loads, and
+ kCFURLIsPackageKey (and kCFURLEnumeratorSkipPackageContents) ask it whether a directory is a
+ package by its type. It is called only for an existing directory that does not have the
+ Finder's bundle bit set, which makes a directory a package on its own.
+ */
+typedef Boolean (*_CFURLPackageProvider)(CFURLRef directoryURL);
+CF_EXPORT void _CFURLSetPackageProvider(_CFURLPackageProvider provider);
+
 /* The relativeToURL and matchingPropertyKeys parameters are not used and are ignored */
 CF_EXPORT
 CFURLBookmarkMatchResult _CFURLBookmarkDataCompare(CFDataRef bookmark1Ref, CFDataRef bookmark2Ref, CFURLRef relativeToURL, CFArrayRef* matchingPropertyKeys) CF_AVAILABLE(10_7, NA);
