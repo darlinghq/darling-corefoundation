@@ -26,22 +26,19 @@ CF_PRIVATE
 @end
 
 
-NSString *const NSCocoaErrorDomain = @"NSCocoaErrorDomain";
-NSString *const NSPOSIXErrorDomain = @"NSPOSIXErrorDomain";
-NSString *const NSOSStatusErrorDomain = @"NSOSStatusErrorDomain";
-NSString *const NSMachErrorDomain = @"NSMachErrorDomain";
-NSString *const NSUnderlyingErrorKey = @"NSUnderlyingError";
-NSString *const NSLocalizedDescriptionKey = @"NSLocalizedDescription";
-NSString *const NSLocalizedFailureReasonErrorKey = @"NSLocalizedFailureReason";
-NSString *const NSLocalizedRecoverySuggestionErrorKey = @"NSLocalizedRecoverySuggestion";
-NSString *const NSLocalizedRecoveryOptionsErrorKey = @"NSLocalizedRecoveryOptions";
-NSString *const NSRecoveryAttempterErrorKey = @"NSRecoveryAttempter";
-NSString *const NSHelpAnchorErrorKey = @"NSHelpAnchor";
-NSString *const NSStringEncodingErrorKey = @"NSStringEncoding";
-NSString *const NSURLErrorKey = @"NSURL";
-NSString *const NSFilePathErrorKey = @"NSFilePath";
-NSString *const NSDebugDescriptionErrorKey = @"NSDebugDescription";
-NSString *const NSLocalizedFailureErrorKey = @"NSLocalizedFailure";
+// These are CoreFoundation's private copies, used by the NSError implementation in this
+// image. The exported constants (NSPOSIXErrorDomain and the rest of NSError.h) are defined by
+// Foundation, which is where binaries built for macOS import them from.
+CF_PRIVATE NSString *const NSCocoaErrorDomain = @"NSCocoaErrorDomain";
+CF_PRIVATE NSString *const NSPOSIXErrorDomain = @"NSPOSIXErrorDomain";
+CF_PRIVATE NSString *const NSOSStatusErrorDomain = @"NSOSStatusErrorDomain";
+CF_PRIVATE NSString *const NSMachErrorDomain = @"NSMachErrorDomain";
+CF_PRIVATE NSString *const NSLocalizedDescriptionKey = @"NSLocalizedDescription";
+CF_PRIVATE NSString *const NSLocalizedFailureReasonErrorKey = @"NSLocalizedFailureReason";
+CF_PRIVATE NSString *const NSLocalizedRecoverySuggestionErrorKey = @"NSLocalizedRecoverySuggestion";
+CF_PRIVATE NSString *const NSLocalizedRecoveryOptionsErrorKey = @"NSLocalizedRecoveryOptions";
+CF_PRIVATE NSString *const NSRecoveryAttempterErrorKey = @"NSRecoveryAttempter";
+CF_PRIVATE NSString *const NSHelpAnchorErrorKey = @"NSHelpAnchor";
 
 static NSError *_outOfmemoryError = nil;
 

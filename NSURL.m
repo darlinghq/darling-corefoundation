@@ -25,7 +25,8 @@
 
 #define STACK_BUFFER_SIZE 100 // pretty safe bet this will be quite unlikely to use more than this since there are only 94 properties
 
-NSString *const NSURLFileScheme = @"file";
+// Defined here, not in Foundation: the macOS Foundation binary imports this key from CoreFoundation.
+NSString *const NSThumbnail1024x1024SizeKey = @"NSThumbnail1024x1024SizeKey";
 NSString *const NSURLAddedToDirectoryDateKey = @"NSURLAddedToDirectoryDateKey";
 NSString *const NSURLKeysOfUnsetValuesKey = @"NSURLKeysOfUnsetValuesKey";
 NSString *const NSURLNameKey = @"NSURLNameKey";
@@ -130,9 +131,6 @@ NSString *const NSURLUbiquitousItemDownloadingStatusKey = @"NSURLUbiquitousItemD
 NSString *const NSURLApplicationIsScriptableKey = @"NSURLApplicationIsScriptableKey";
 NSString *const NSURLCanonicalPathKey = @"NSURLCanonicalPathKey";
 NSString *const NSURLDocumentIdentifierKey = @"NSURLDocumentIdentifierKey";
-NSString *const NSURLErrorFailingURLErrorKey = @"NSURLErrorFailingURLErrorKey";
-NSString *const NSURLErrorFailingURLPeerTrustErrorKey = @"NSURLErrorFailingURLPeerTrustErrorKey";
-NSString *const NSURLErrorFailingURLStringErrorKey = @"NSURLErrorFailingURLStringErrorKey";
 NSString *const NSURLGenerationIdentifierKey = @"NSURLGenerationIdentifierKey";
 NSString *const NSURLIsApplicationKey = @"NSURLIsApplicationKey";
 NSString *const NSURLQuarantinePropertiesKey = @"NSURLQuarantinePropertiesKey";

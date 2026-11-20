@@ -13,9 +13,6 @@
 #include <errno.h>
 #include <sys/syslimits.h>
 
-extern const CFStringRef NSURLErrorKey;
-extern const CFStringRef NSFilePathErrorKey;
-
 static CFIndex CFURLEnumeratorPushURL(CFURLEnumeratorRef enumerator, CFURLRef url, CFErrorRef *error);
 static CFIndex CFURLEnumeratorPopURL(CFURLEnumeratorRef enumerator);
 
@@ -95,8 +92,8 @@ static struct __CFURLEnumerator *_CFURLEnumeratorCreate(CFAllocatorRef allocator
 static void cocoaError(CFErrorRef *error, CFIndex code, CFURLRef url, CFStringRef path) {
     if (error) {
         const CFStringRef keys[2] = {
-            NSURLErrorKey,
-            NSFilePathErrorKey
+            kCFErrorURLKey,
+            kCFErrorFilePathKey
         };
         CFTypeRef values[2] = {
             url,
@@ -120,8 +117,8 @@ static void readError(CFErrorRef *error, CFURLRef url, CFStringRef path) {
         }
         const CFStringRef keys[3] = {
             kCFErrorUnderlyingErrorKey,
-            NSURLErrorKey,
-            NSFilePathErrorKey
+            kCFErrorURLKey,
+            kCFErrorFilePathKey
         };
         // kCFErrorUnderlyingErrorKey values must be CFErrors: CFError's description reads them as such.
         CFErrorRef underlyingError = CFErrorCreate(kCFAllocatorDefault, kCFErrorDomainPOSIX, saved_errno, NULL);

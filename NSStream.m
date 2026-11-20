@@ -23,13 +23,6 @@ NSString *const NSStreamSOCKSProxyVersion4 = @"kCFStreamSocketSOCKSVersion4";
 NSString *const NSStreamSOCKSProxyVersion5 = @"kCFStreamSocketSOCKSVersion5";
 NSString *const NSStreamDataWrittenToMemoryStreamKey = @"kCFStreamPropertyDataWritten";
 NSString *const NSStreamFileCurrentOffsetKey = @"kCFStreamPropertyFileCurrentOffset";
-NSString *const NSStreamSocketSSLErrorDomain = @"NSStreamSocketSSLErrorDomain";
-NSString *const NSStreamSOCKSErrorDomain = @"NSStreamSOCKSErrorDomain";
-NSString *const NSStreamNetworkServiceType = @"kCFStreamNetworkServiceType";
-NSString *const NSStreamNetworkServiceTypeVoIP = @"kCFStreamNetworkServiceTypeVoIP";
-NSString *const NSStreamNetworkServiceTypeVideo = @"kCFStreamNetworkServiceTypeVideo";
-NSString *const NSStreamNetworkServiceTypeBackground = @"kCFStreamNetworkServiceTypeBackground";
-NSString *const NSStreamNetworkServiceTypeVoice = @"kCFStreamNetworkServiceTypeVoice";
 
 @implementation NSStream
 
