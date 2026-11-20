@@ -121,13 +121,19 @@ static void posixError(CFErrorRef *error, CFURLRef url, CFStringRef path) {
 
 static CFIndex CFURLEnumeratorPushURL(CFURLEnumeratorRef enumerator, CFURLRef url, CFErrorRef *error) {
     char path[PATH_MAX] = { 0 };
-    CFStringRef urlPath = CFURLCopyPath(url);
-    Boolean success = CFStringGetFileSystemRepresentation(urlPath, path, PATH_MAX);
-    
-    if (!success) {
+    // The URL may be relative to a base URL and its path percent-escaped:
+    // open the directory it resolves to in the file system.
+    if (!CFURLGetFileSystemRepresentation(url, true, (UInt8 *)path, PATH_MAX)) {
+        CFStringRef urlPath = CFURLCopyPath(url);
         cocoaError(error, -1, url, urlPath);
-        CFRelease(urlPath);
+        if (urlPath != NULL) {
+            CFRelease(urlPath);
+        }
         return kCFNotFound;
+    }
+    CFStringRef urlPath = CFStringCreateWithFileSystemRepresentation(kCFAllocatorDefault, path);
+    if (urlPath == NULL) {
+        urlPath = CFURLCopyPath(url);
     }
 
     DIR *dir = opendir(path);
@@ -142,6 +148,9 @@ static CFIndex CFURLEnumeratorPushURL(CFURLEnumeratorRef enumerator, CFURLRef ur
     struct dirent *current = NULL;
     while ((current = readdir(dir)) != NULL) {
         if (strcmp(current->d_name, ".") == 0 || strcmp(current->d_name, "..") == 0) {
+            continue;
+        }
+        if ((enumerator->options & kCFURLEnumeratorSkipInvisibles) != 0 && current->d_name[0] == '.') {
             continue;
         }
         CFMutableDictionaryRef fileInfo = CFDictionaryCreateMutable(kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
