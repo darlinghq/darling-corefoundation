@@ -223,6 +223,15 @@ static CFIndex CFURLEnumeratorPeek(CFURLEnumeratorRef enumerator, CFURLRef *url)
     return count;
 }
 
+static Boolean CFURLEnumeratorIsPackage(CFURLRef url) {
+    CFTypeRef value = NULL;
+    Boolean isPackage = CFURLCopyResourcePropertyForKey(url, kCFURLIsPackageKey, &value, NULL) && value == kCFBooleanTrue;
+    if (value != NULL) {
+        CFRelease(value);
+    }
+    return isPackage;
+}
+
 CFURLEnumeratorRef CFURLEnumeratorCreateForDirectoryURL(CFAllocatorRef alloc, CFURLRef directoryURL, CFURLEnumeratorOptions option, CFArrayRef propertyKeys) {
     struct __CFURLEnumerator *enumerator = _CFURLEnumeratorCreate(alloc);
     enumerator->directoryURL = (CFURLRef)CFRetain(directoryURL);
@@ -299,7 +308,9 @@ CFURLEnumeratorResult CFURLEnumeratorGetNextURL(CFURLEnumeratorRef enumer, CFURL
 
     enumerator->pushedLastItem = false;
 
-    if (isDir && (enumerator->options & kCFURLEnumeratorDescendRecursively) != 0) {
+    // A package is returned itself, but its contents are skipped when asked.
+    if (isDir && (enumerator->options & kCFURLEnumeratorDescendRecursively) != 0 &&
+        !((enumerator->options & kCFURLEnumeratorSkipPackageContents) != 0 && CFURLEnumeratorIsPackage(item))) {
         if (CFURLEnumeratorPushURL(enumerator, item, error) <= 0) {
             result = kCFURLEnumeratorError; // error populated by push
         } else {
