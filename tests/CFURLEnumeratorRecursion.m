@@ -56,7 +56,6 @@ int main(void) {
             while (CFURLEnumeratorGetNextURL(enumer, &url, &error) == kCFURLEnumeratorSuccess) {
                 if (url != NULL) {
                     [paths addObject:[(__bridge NSURL *)url lastPathComponent]];
-                    CFRelease(url);
                 }
             }
             check_result("flat enumeration does not descend", [paths count] == 2);
@@ -77,7 +76,6 @@ int main(void) {
             while (CFURLEnumeratorGetNextURL(enumer, &url, &error) == kCFURLEnumeratorSuccess) {
                 if (url != NULL) {
                     [paths addObject:[(__bridge NSURL *)url lastPathComponent]];
-                    CFRelease(url);
                 }
             }
             check_result("recursive enumeration descends into subdirectories", [paths count] == 5);
@@ -131,7 +129,6 @@ int main(void) {
                     if ([name isEqualToString:@"sub"]) {
                         CFURLEnumeratorSkipDescendents(enumer);
                     }
-                    CFRelease(url);
                 }
             }
             check_result("skipDescendents skips nested directory contents", ![paths containsObject:@"file2.txt"] && ![paths containsObject:@"file3.txt"]);

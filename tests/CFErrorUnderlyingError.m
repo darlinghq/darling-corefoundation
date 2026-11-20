@@ -82,8 +82,6 @@ static void check_enumerator_error(NSString *base)
     while (enumerator != NULL && error == NULL) {
         CFURLRef url = NULL;
         result = CFURLEnumeratorGetNextURL(enumerator, &url, &error);
-        if (url != NULL)
-            CFRelease(url);
         if (result == kCFURLEnumeratorEnd)
             break;
     }
