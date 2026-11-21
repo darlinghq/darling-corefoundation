@@ -49,6 +49,17 @@ int main(void) {
         CHECK([[dirResolved path] isEqualToString: sub]);
         CHECK([dirResolved hasDirectoryPath]);
 
+        // Resource values are read back from the data, also once the item is gone.
+        NSData *withValues = [fileURL bookmarkDataWithOptions: 0
+                                includingResourceValuesForKeys: @[NSURLNameKey, NSURLFileSizeKey, NSURLParentDirectoryURLKey]
+                                                 relativeToURL: nil error: &error];
+        NSDictionary *stored = [NSURL resourceValuesForKeys: @[NSURLNameKey, NSURLFileSizeKey, NSURLParentDirectoryURLKey, NSURLIsDirectoryKey]
+                                            fromBookmarkData: withValues];
+        CHECK([[stored objectForKey: NSURLNameKey] isEqual: @"f.txt"]);
+        CHECK([[stored objectForKey: NSURLFileSizeKey] isEqual: @4]);
+        CHECK([[[stored objectForKey: NSURLParentDirectoryURLKey] path] isEqualToString: sub]);
+        CHECK([stored objectForKey: NSURLIsDirectoryKey] == nil);
+
         // Relative to a URL: the directory moves, the item is found in the same place below the new location.
         NSURL *docsURL = [NSURL fileURLWithPath: docs isDirectory: YES];
         NSData *relativeData = [fileURL bookmarkDataWithOptions: 0 includingResourceValuesForKeys: nil relativeToURL: docsURL error: &error];

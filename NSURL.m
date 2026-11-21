@@ -1804,16 +1804,78 @@ CFDataRef CFURLCreateBookmarkData(CFAllocatorRef allocator, CFURLRef url, CFURLB
     return data;
 }
 
+// The resource values stored in the data, without resolving it.
+static CFDictionaryRef CFURLBookmarkCopyResourceValues(CFDataRef bookmark)
+{
+    if (bookmark == NULL)
+    {
+        return NULL;
+    }
+    CFDictionaryRef record = CFURLBookmarkCopyRecord(bookmark, NULL);
+    CFDictionaryRef values = record != NULL ? CFURLBookmarkGetValue(record, CFURLBookmarkResourceValuesKey, CFDictionaryGetTypeID()) : NULL;
+    if (values != NULL)
+    {
+        CFRetain(values);
+    }
+    if (record != NULL)
+    {
+        CFRelease(record);
+    }
+    return values;
+}
+
 CFTypeRef CFURLCreateResourcePropertyForKeyFromBookmarkData(CFAllocatorRef allocator, CFStringRef resourcePropertyToReturn, CFDataRef bookmark)
 {
-#warning TODO: FIXME
-    return NULL;
+    if (resourcePropertyToReturn == NULL)
+    {
+        return NULL;
+    }
+    CFTypeRef result = NULL;
+    CFDictionaryRef values = CFURLBookmarkCopyResourceValues(bookmark);
+    CFTypeRef stored = values != NULL ? CFDictionaryGetValue(values, resourcePropertyToReturn) : NULL;
+
+    if (stored != NULL)
+    {
+        result = CFURLBookmarkCopyStoredValue(stored);
+    }
+    if (values != NULL)
+    {
+        CFRelease(values);
+    }
+    return result;
 }
 
 CFDictionaryRef CFURLCreateResourcePropertiesForKeysFromBookmarkData(CFAllocatorRef allocator, CFArrayRef resourcePropertiesToReturn, CFDataRef bookmark)
 {
-#warning TODO: FIXME
-    return NULL;
+    if (bookmark == NULL)
+    {
+        return NULL;
+    }
+    CFDictionaryRef record = CFURLBookmarkCopyRecord(bookmark, NULL);
+    if (record == NULL)
+    {
+        return NULL;
+    }
+
+    CFDictionaryRef values = CFURLBookmarkGetValue(record, CFURLBookmarkResourceValuesKey, CFDictionaryGetTypeID());
+    CFMutableDictionaryRef result = CFDictionaryCreateMutable(allocator, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFIndex count = resourcePropertiesToReturn != NULL ? CFArrayGetCount(resourcePropertiesToReturn) : 0;
+    for (CFIndex i = 0; values != NULL && i < count; i++)
+    {
+        CFStringRef key = CFArrayGetValueAtIndex(resourcePropertiesToReturn, i);
+        CFTypeRef stored = CFDictionaryGetValue(values, key);
+        if (stored != NULL)
+        {
+            CFTypeRef value = CFURLBookmarkCopyStoredValue(stored);
+            if (value != NULL)
+            {
+                CFDictionarySetValue(result, key, value);
+                CFRelease(value);
+            }
+        }
+    }
+    CFRelease(record);
+    return result;
 }
 
 Boolean CFURLResourceIsReachable(CFURLRef url, CFErrorRef *error)
