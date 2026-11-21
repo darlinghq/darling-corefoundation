@@ -66,6 +66,8 @@ int main(void) {
         NSURL *parent = Value(fileURL, NSURLParentDirectoryURLKey);
         CHECK([[parent path] isEqualToString: dir]);
         CHECK([[Value(folderURL, NSURLParentDirectoryURLKey) path] isEqualToString: dir]);
+        // A missing item is a read error here too (observed on macOS 26.7.3).
+        CheckMissing([NSURL fileURLWithPath: missing], NSURLParentDirectoryURLKey);
 
         // NSURLFileResourceIdentifierKey
         id identifier = Value(fileURL, NSURLFileResourceIdentifierKey);

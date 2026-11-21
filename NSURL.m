@@ -726,8 +726,21 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
         // Key for the parent directory of the resource, returned as a CFURL object, or nil if the resource is the root directory of its volume.
         Boolean isRoot = false;
 
-        // When the root question cannot be answered (a missing item) the parent is the URL's parent.
-        if (!CFURLGetIsVolumeRoot(url, &isRoot) || !isRoot)
+        // A missing item is the same file read error as for the other keys (macOS 26.7.3 gives error 260 for it,
+        // tier 2 observation; test: tests/nsurl-volume-and-identifier-keys.m). When the root question cannot be
+        // answered for another reason (a directory that may not be searched) the parent is the URL's parent.
+        if (!CFURLGetIsVolumeRoot(url, &isRoot))
+        {
+            if (errno == ENOENT || errno == ENOTDIR)
+            {
+                resourceReadError(error);
+            }
+            else
+            {
+                value = CFURLCreateCopyDeletingLastPathComponent(kCFAllocatorDefault, url);
+            }
+        }
+        else if (!isRoot)
         {
             value = CFURLCreateCopyDeletingLastPathComponent(kCFAllocatorDefault, url);
         }
