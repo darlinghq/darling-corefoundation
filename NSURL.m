@@ -1612,8 +1612,11 @@ static CFDictionaryRef CFURLBookmarkCopyRecord(CFDataRef bookmark, CFErrorRef *e
 // inode of a file saved by writing a new file and renaming it over the old one changes, and a file system
 // may reuse the inode of a deleted file, so replacement is not always seen. The device number is not
 // compared: it is not stable for every file system (a union or overlay file system hands out its own).
-// GUESS: the documentation does not say when bookmark data is stale beyond "needs to be recreated", nor
-// which error a missing item is reported with (260, NSFileReadNoSuchFileError, here).
+// GUESS: the documentation does not say when bookmark data is stale beyond "needs to be recreated".
+// QUIRK: the data is also stale when the item is found at another path than the recorded one (for example a
+// relative bookmark resolved against a moved directory), and a missing item is NSCocoaErrorDomain 4
+// (NSFileNoSuchFileError), not 260. Not documented. Evidence: black-box observation on macOS 26.7.3 (x86_64),
+// tier 2. Test: tests/nsurl-bookmark-data.m, "moved directory" and "A missing item".
 CFURLRef CFURLCreateByResolvingBookmarkData(CFAllocatorRef allocator, CFDataRef bookmark, CFURLBookmarkResolutionOptions options, CFURLRef relativeToURL, CFArrayRef resourcePropertiesToInclude, Boolean* isStale, CFErrorRef* error)
 {
     if (isStale != NULL)
@@ -1685,15 +1688,31 @@ CFURLRef CFURLCreateByResolvingBookmarkData(CFAllocatorRef allocator, CFDataRef 
     }
     if (chosen >= 0)
     {
-        if (isStale != NULL && knowsInode)
+        if (isStale != NULL)
         {
-            *isStale = !matched;
+            char recorded[PATH_MAX];
+            Boolean samePath = path != NULL && CFStringGetFileSystemRepresentation(path, recorded, sizeof(recorded)) && strcmp(recorded, candidates[chosen]) == 0;
+            *isStale = (knowsInode && !matched) || !samePath;
         }
         result = CFURLCreateFromFileSystemRepresentation(allocator, (const UInt8 *)candidates[chosen], strlen(candidates[chosen]), S_ISDIR(chosenInfo.st_mode));
     }
     if (result == NULL)
     {
-        cocoaReadError(error, failure);
+        if (failure == ENOENT || failure == ENOTDIR)
+        {
+            if (error != NULL)
+            {
+                CFErrorRef underlying = CFErrorCreate(kCFAllocatorDefault, kCFErrorDomainPOSIX, failure, NULL);
+                const CFStringRef keys[1] = { kCFErrorUnderlyingErrorKey };
+                CFTypeRef values[1] = { underlying };
+                *error = CFErrorCreateWithUserInfoKeysAndValues(kCFAllocatorDefault, kCFErrorDomainCocoa, 4 /* NSFileNoSuchFileError */, (const void *const *)keys, (const void *const *)values, 1);
+                CFRelease(underlying);
+            }
+        }
+        else
+        {
+            cocoaReadError(error, failure);
+        }
     }
     CFRelease(record);
     return result;
@@ -1759,13 +1778,17 @@ CFDataRef CFURLCreateBookmarkData(CFAllocatorRef allocator, CFURLRef url, CFURLB
                 CFRelease(relativePath);
             }
 
-            CFIndex keyCount = resourcePropertiesToInclude != NULL ? CFArrayGetCount(resourcePropertiesToInclude) : 0;
-            if (keyCount > 0)
+            // QUIRK: the name and the directory flag are stored whether or not they were asked for. Not documented.
+            // Evidence: black-box observation on macOS 26.7.3 (x86_64), tier 2: resourceValuesForKeys:fromBookmarkData:
+            // returns them for data made with no keys. Test: tests/nsurl-bookmark-data.m, "default values".
             {
+                CFIndex requested = resourcePropertiesToInclude != NULL ? CFArrayGetCount(resourcePropertiesToInclude) : 0;
+                CFIndex keyCount = requested + 2;
                 CFMutableDictionaryRef values = CFDictionaryCreateMutable(kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
                 for (CFIndex i = 0; i < keyCount; i++)
                 {
-                    CFStringRef key = CFArrayGetValueAtIndex(resourcePropertiesToInclude, i);
+                    CFStringRef key = i < requested ? CFArrayGetValueAtIndex(resourcePropertiesToInclude, i)
+                        : (i == requested ? kCFURLNameKey : kCFURLIsDirectoryKey);
                     CFTypeRef value = NULL;
                     if (CFURLCopyResourcePropertyForKey(url, key, &value, NULL) && value != NULL)
                     {
@@ -1776,8 +1799,8 @@ CFDataRef CFURLCreateBookmarkData(CFAllocatorRef allocator, CFURLRef url, CFURLB
                             CFRelease(storable);
                         }
                     }
-                    if (value != NULL)
-                        CFRelease(value);
+                    // CFURLCopyResourcePropertyForKey hands out a value that the URL's own cache keeps alive and
+                    // that the caller does not own, so it is not released here (releasing it freed the cached value).
                 }
                 CFDictionarySetValue(record, CFURLBookmarkResourceValuesKey, values);
                 CFRelease(values);

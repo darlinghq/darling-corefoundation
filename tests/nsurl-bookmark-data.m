@@ -47,7 +47,7 @@ int main(void) {
         NSData *dirData = [subURL bookmarkDataWithOptions: 0 includingResourceValuesForKeys: nil relativeToURL: nil error: NULL];
         NSURL *dirResolved = [NSURL URLByResolvingBookmarkData: dirData options: 0 relativeToURL: nil bookmarkDataIsStale: NULL error: NULL];
         CHECK([[dirResolved path] isEqualToString: sub]);
-        CHECK([dirResolved hasDirectoryPath]);
+        CHECK(CFURLHasDirectoryPath((CFURLRef)dirResolved));
 
         // Resource values are read back from the data, also once the item is gone.
         NSData *withValues = [fileURL bookmarkDataWithOptions: 0
@@ -58,7 +58,8 @@ int main(void) {
         CHECK([[stored objectForKey: NSURLNameKey] isEqual: @"f.txt"]);
         CHECK([[stored objectForKey: NSURLFileSizeKey] isEqual: @4]);
         CHECK([[[stored objectForKey: NSURLParentDirectoryURLKey] path] isEqualToString: sub]);
-        CHECK([stored objectForKey: NSURLIsDirectoryKey] == nil);
+        // default values: the directory flag is stored although it was not asked for (observed on macOS 26.7.3)
+        CHECK([[stored objectForKey: NSURLIsDirectoryKey] isEqual: @NO]);
 
         // Relative to a URL: the directory moves, the item is found in the same place below the new location.
         NSURL *docsURL = [NSURL fileURLWithPath: docs isDirectory: YES];
@@ -70,7 +71,8 @@ int main(void) {
         stale = YES;
         resolved = [NSURL URLByResolvingBookmarkData: relativeData options: 0 relativeToURL: movedURL bookmarkDataIsStale: &stale error: &error];
         CHECK([[resolved path] isEqualToString: [moved stringByAppendingPathComponent: @"sub/f.txt"]]);
-        CHECK(!stale);
+        // moved directory: found at another path than recorded, so stale (observed on macOS 26.7.3)
+        CHECK(stale);
         file = [moved stringByAppendingPathComponent: @"sub/f.txt"];
         fileURL = [NSURL fileURLWithPath: file];
 
@@ -104,7 +106,7 @@ int main(void) {
         [fm removeItemAtPath: file error: NULL];
         resolved = [NSURL URLByResolvingBookmarkData: data options: 0 relativeToURL: nil bookmarkDataIsStale: NULL error: &error];
         CHECK(resolved == nil);
-        CHECK([[error domain] isEqualToString: NSCocoaErrorDomain] && [error code] == 260);
+        CHECK([[error domain] isEqualToString: NSCocoaErrorDomain] && [error code] == 4);
         error = nil;
         CHECK([fileURL bookmarkDataWithOptions: 0 includingResourceValuesForKeys: nil relativeToURL: nil error: &error] == nil);
         CHECK([[error domain] isEqualToString: NSCocoaErrorDomain] && [error code] == 260);
@@ -159,7 +161,7 @@ int main(void) {
         NSDictionary *forgedStored = [NSURL resourceValuesForKeys: @[NSURLNameKey, NSURLIsDirectoryKey] fromBookmarkData: forgedValuesData];
         CHECK([[forgedStored objectForKey: NSURLIsDirectoryKey] isEqual: @NO]);
 
-        // Data made by earlier versions, the path alone; for an item that is gone it is nil with 260.
+        // Data made by earlier versions, the path alone; for an item that is gone it is nil with 4.
         NSData *legacy = [kept dataUsingEncoding: NSUTF8StringEncoding];
         resolved = [NSURL URLByResolvingBookmarkData: legacy options: 0 relativeToURL: nil bookmarkDataIsStale: &stale error: NULL];
         CHECK([[resolved path] isEqualToString: kept]);
@@ -168,7 +170,7 @@ int main(void) {
         error = nil;
         resolved = [NSURL URLByResolvingBookmarkData: legacy options: 0 relativeToURL: nil bookmarkDataIsStale: NULL error: &error];
         CHECK(resolved == nil);
-        CHECK([[error domain] isEqualToString: NSCocoaErrorDomain] && [error code] == 260);
+        CHECK([[error domain] isEqualToString: NSCocoaErrorDomain] && [error code] == 4);
 
         // A file name that is not valid UTF-8 (skipped where the file system refuses the name): no bookmark, an error, no crash.
         char badPath[PATH_MAX];
