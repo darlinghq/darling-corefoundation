@@ -249,6 +249,39 @@ static Boolean CFURLStat(CFURLRef url, struct stat *info) {
     return false;
 }
 
+// Whether the item is the root directory of a volume (NSURLIsVolumeKey): a directory whose parent is on
+// another device, or is the directory itself (the root of the file system). A bind mount within one device
+// is not told apart from an ordinary directory. Returns false with errno set when that cannot be told:
+// the item is missing, or it is a directory the process may not search (its parent is reached through it).
+static Boolean CFURLGetIsVolumeRoot(CFURLRef url, Boolean *isRoot)
+{
+    UInt8 path[PATH_MAX + 4] = { 0 };
+    struct stat item, parent;
+
+    if (!CFURLGetFileSystemRepresentation(url, true, path, PATH_MAX))
+    {
+        errno = EINVAL;
+        return false;
+    }
+    if (lstat((const char *)path, &item) == -1)
+    {
+        return false;
+    }
+    if (!S_ISDIR(item.st_mode))
+    {
+        *isRoot = false;
+        return true;
+    }
+
+    strlcat((char *)path, "/..", sizeof(path));
+    if (stat((const char *)path, &parent) == -1)
+    {
+        return false;
+    }
+    *isRoot = item.st_dev != parent.st_dev || item.st_ino == parent.st_ino;
+    return true;
+}
+
 // The uniform type identifier comes from LaunchServices (as on macOS), which CoreFoundation loads at
 // run time. NSURLContentTypeKey needs a UTType object, which belongs to UniformTypeIdentifiers, a
 // framework above Foundation; CoreFoundation does not reach up to it and leaves that key unhandled.
@@ -555,7 +588,16 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
     }
     else if (CFEqual(key, kCFURLIsVolumeKey))
     {
-        // is this doable?
+        Boolean isRoot = false;
+
+        if (CFURLGetIsVolumeRoot(url, &isRoot))
+        {
+            value = isRoot ? kCFBooleanTrue : kCFBooleanFalse;
+        }
+        else
+        {
+            resourceReadError(error);
+        }
     }
     else if (CFEqual(key, kCFURLIsPackageKey))
     {
@@ -682,7 +724,26 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
     else if (CFEqual(key, kCFURLParentDirectoryURLKey))
     {
         // Key for the parent directory of the resource, returned as a CFURL object, or nil if the resource is the root directory of its volume.
-        value = CFURLCreateCopyDeletingLastPathComponent(kCFAllocatorDefault, url);
+        Boolean isRoot = false;
+
+        // A missing item is the same file read error as for the other keys (macOS 26.7.3 gives error 260 for it,
+        // tier 2 observation; test: tests/nsurl-volume-and-identifier-keys.m). When the root question cannot be
+        // answered for another reason (a directory that may not be searched) the parent is the URL's parent.
+        if (!CFURLGetIsVolumeRoot(url, &isRoot))
+        {
+            if (errno == ENOENT || errno == ENOTDIR)
+            {
+                resourceReadError(error);
+            }
+            else
+            {
+                value = CFURLCreateCopyDeletingLastPathComponent(kCFAllocatorDefault, url);
+            }
+        }
+        else if (!isRoot)
+        {
+            value = CFURLCreateCopyDeletingLastPathComponent(kCFAllocatorDefault, url);
+        }
     }
     else if (CFEqual(key, kCFURLVolumeURLKey))
     {
@@ -728,7 +789,16 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
         // This identifier can be used to determine equality between file system resources with the CFEqual function. Two resources are equal if they have the same file-system path or if their paths link to the same inode on the same file system.
         // The value of this identifier is not persistent across system restarts.
         // Available in iOS 5.0 and later.
-
+        // The value is the device and inode numbers as CFData: equal data for paths to the same inode of one file system.
+        if (CFURLStat(url, &info))
+        {
+            UInt64 identity[2] = { (UInt64)info.st_dev, (UInt64)info.st_ino };
+            value = CFDataCreate(kCFAllocatorDefault, (const UInt8 *)identity, sizeof(identity));
+        }
+        else
+        {
+            resourceReadError(error);
+        }
     }
     else if (CFEqual(key, kCFURLVolumeIdentifierKey))
     {
@@ -817,6 +887,26 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
     else if (CFEqual(key, kCFURLFileResourceTypeKey))
     {
         // Key for the resource’s object type, returned as a CFString object. See “File Resource Types” for possible values.
+    }
+    else if (CFEqual(key, kCFURLVolumeIsReadOnlyKey))
+    {
+        // The volume of the item a symbolic link points to, like the capacity keys below (statvfs follows links).
+        UInt8 path[PATH_MAX] = { 0 };
+        struct statvfs vfs;
+
+        if (!CFURLGetFileSystemRepresentation(url, true, path, PATH_MAX))
+        {
+            errno = EINVAL;
+            resourceReadError(error);
+        }
+        else if (statvfs((const char *)path, &vfs) == 0)
+        {
+            value = (vfs.f_flag & ST_RDONLY) ? kCFBooleanTrue : kCFBooleanFalse;
+        }
+        else
+        {
+            resourceReadError(error);
+        }
     }
     else if (CFEqual(key, kCFURLVolumeAvailableCapacityKey))
     {
