@@ -410,12 +410,14 @@ static CFTypeRef CFURLCreateContentType(CFURLRef url, CFErrorRef *error)
 }
 
 // The Finder flags live in bytes 8 and 9 (big endian) of the 32-byte "com.apple.FinderInfo"
-// extended attribute; kExtensionIsHidden is the 0x0010 bit of that word and kHasBundle the 0x2000 bit.
+// extended attribute; kExtensionIsHidden is the 0x0010 bit of that word, kHasBundle the 0x2000 bit and
+// kIsInvisible the 0x4000 bit.
 enum {
     kFinderInfoSize = 32,
     kFinderFlagsOffset = 8,
     kFinderExtensionIsHidden = 0x0010,
     kFinderHasBundle = 0x2000,
+    kFinderIsInvisible = 0x4000,
 };
 
 // Reads the FinderInfo of the item itself (a symbolic link is not followed). Returns false
@@ -488,8 +490,8 @@ static Boolean CFURLDirectoryIsPackage(CFURLRef url)
     return provider != NULL && provider(url);
 }
 
-// Sets or clears the extension-hidden flag, leaving the rest of the FinderInfo as it is.
-static Boolean CFURLSetExtensionIsHidden(CFURLRef url, Boolean hidden)
+// Sets or clears one of the Finder flags, leaving the rest of the FinderInfo as it is.
+static Boolean CFURLSetFinderFlag(CFURLRef url, UInt16 flag, Boolean hidden)
 {
     UInt8 info[kFinderInfoSize];
     UInt8 path[PATH_MAX] = { 0 };
@@ -500,7 +502,7 @@ static Boolean CFURLSetExtensionIsHidden(CFURLRef url, Boolean hidden)
     }
 
     UInt16 flags = (info[kFinderFlagsOffset] << 8) | info[kFinderFlagsOffset + 1];
-    UInt16 updated = hidden ? (flags | kFinderExtensionIsHidden) : (flags & ~kFinderExtensionIsHidden);
+    UInt16 updated = hidden ? (flags | flag) : (flags & ~flag);
     if (updated == flags && (hidden == false))
     {
         // Nothing to clear, and no attribute needs to be created for that.
@@ -512,6 +514,68 @@ static Boolean CFURLSetExtensionIsHidden(CFURLRef url, Boolean hidden)
 
     CFURLGetFileSystemRepresentation(url, true, path, PATH_MAX);
     return setxattr((const char *)path, XATTR_FINDERINFO_NAME, info, kFinderInfoSize, 0, XATTR_NOFOLLOW) == 0;
+}
+
+static Boolean CFURLSetExtensionIsHidden(CFURLRef url, Boolean hidden)
+{
+    return CFURLSetFinderFlag(url, kFinderExtensionIsHidden, hidden);
+}
+
+// Whether the item is hidden: a name starting with ".", UF_HIDDEN in its flags, or the Finder's invisible flag
+// (as observed on macOS 10.14.4 and 26.7.3; tests/URLIsHidden.m)
+static Boolean CFURLIsHidden(CFURLRef url)
+{
+    Boolean hidden = false;
+    CFStringRef lastPathComp = CFURLCopyLastPathComponent(url);
+    if (lastPathComp != NULL)
+    {
+        hidden = CFStringGetLength(lastPathComp) > 0 && CFStringGetCharacterAtIndex(lastPathComp, 0) == '.';
+        CFRelease(lastPathComp);
+    }
+    if (hidden)
+    {
+        return true;
+    }
+
+    UInt8 path[PATH_MAX] = { 0 };
+    struct stat info;
+    if (CFURLGetFileSystemRepresentation(url, true, path, PATH_MAX) && lstat((const char *)path, &info) == 0
+        && (info.st_flags & UF_HIDDEN) != 0)
+    {
+        return true;
+    }
+
+    UInt8 finderInfo[kFinderInfoSize];
+    return CFURLReadFinderInfo(url, finderInfo)
+        && (((finderInfo[kFinderFlagsOffset] << 8) | finderInfo[kFinderFlagsOffset + 1]) & kFinderIsInvisible) != 0;
+}
+
+// Hides or shows the item as macOS does: the Finder's invisible flag and UF_HIDDEN. Succeeds if either could be
+// stored (file systems without file flags, such as Linux ones, keep only the FinderInfo); otherwise errno is set.
+static Boolean CFURLSetHidden(CFURLRef url, Boolean hidden)
+{
+    UInt8 path[PATH_MAX] = { 0 };
+    struct stat info;
+    if (!CFURLGetFileSystemRepresentation(url, true, path, PATH_MAX))
+    {
+        errno = EINVAL;
+        return false;
+    }
+    if (lstat((const char *)path, &info) != 0)
+    {
+        return false;
+    }
+
+    Boolean storedInfo = CFURLSetFinderFlag(url, kFinderIsInvisible, hidden);
+    int infoErrno = errno;
+    u_int flags = hidden ? (info.st_flags | UF_HIDDEN) : (info.st_flags & ~UF_HIDDEN);
+    Boolean storedFlags = flags == info.st_flags || lchflags((const char *)path, flags) == 0;
+    if (!storedInfo && !storedFlags)
+    {
+        errno = infoErrno;
+        return false;
+    }
+    return true;
 }
 
 static pthread_mutex_t resInfoLock = PTHREAD_MUTEX_INITIALIZER;
@@ -803,16 +867,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
     }
     else if (CFEqual(key, kCFURLIsHiddenKey))
     {
-        CFStringRef lastPathComp = CFURLCopyLastPathComponent(url);
-        Boolean isHidden = false;
-
-        if (CFStringGetLength(lastPathComp) > 0)
-        {
-            isHidden = CFStringGetCharacterAtIndex(lastPathComp, 0) == '.';
-        }
-
-        value = isHidden ? kCFBooleanTrue : kCFBooleanFalse;
-        CFRelease(lastPathComp);
+        value = CFURLIsHidden(url) ? kCFBooleanTrue : kCFBooleanFalse;
     }
     else if (CFEqual(key, kCFURLHasHiddenExtensionKey))
     {
@@ -1462,7 +1517,14 @@ static CFTypeRef CFURLSetPropertyForKey(CFURLRef url, CFStringRef key, CFTypeRef
     }
     else if (CFEqual(key, kCFURLIsHiddenKey) && CFGetTypeID(value) == CFBooleanGetTypeID())
     {
-        acceptedValue = CFRetain(value);
+        if (CFURLSetHidden(url, CFBooleanGetValue(value)))
+        {
+            acceptedValue = CFRetain(value);
+        }
+        else
+        {
+            posixError(error);
+        }
     }
     else if (CFEqual(key, kCFURLHasHiddenExtensionKey) && CFGetTypeID(value) == CFBooleanGetTypeID())
     {
