@@ -282,8 +282,20 @@ static void CFURLEnsureLaunchServices(void)
     dispatch_once_f(&once, NULL, CFURLLoadLaunchServices);
 }
 
-// Links, folders, directory types that are declared (.app) and files; a path with no extension
-// is public.data (public.unix-executable when executable).
+// Whether the URL's path, with symbolic links resolved, is the mount point of the volume it is on.
+static Boolean CFURLIsMountRoot(CFURLRef url)
+{
+    UInt8 path[PATH_MAX] = { 0 };
+    char resolved[PATH_MAX];
+    struct statfs st;
+    return CFURLGetFileSystemRepresentation(url, true, path, PATH_MAX)
+        && realpath((const char *)path, resolved) != NULL && statfs(resolved, &st) == 0
+        && strcmp(resolved, st.f_mntonname) == 0;
+}
+
+// Links, volumes (a mount point is public.volume, whatever its name), folders, directory types that
+// are declared (.app) and files; a path with no extension is public.data (public.unix-executable
+// when executable).
 static CFStringRef CFURLCreateTypeIdentifier(CFURLRef url, CFErrorRef *error)
 {
     CFURLEnsureLaunchServices();
@@ -308,7 +320,11 @@ static CFStringRef CFURLCreateTypeIdentifier(CFURLRef url, CFErrorRef *error)
     Boolean hasExtension = extension != NULL && CFStringGetLength(extension) > 0;
     CFStringRef result = NULL;
 
-    if (S_ISDIR(info.st_mode))
+    if (S_ISDIR(info.st_mode) && CFURLIsMountRoot(url))
+    {
+        result = CFRetain(CFSTR("public.volume"));
+    }
+    else if (S_ISDIR(info.st_mode))
     {
         if (hasExtension)
         {
@@ -632,13 +648,7 @@ static CFTypeRef createVolumePropertyForKey(CFURLRef url, CFStringRef key)
         return CFDataCreate(kCFAllocatorDefault, (const UInt8 *)&st.f_fsid, sizeof(st.f_fsid));
     }
     if (CFEqual(key, kCFURLIsVolumeKey))
-    {
-        UInt8 path[PATH_MAX] = { 0 };
-        char resolved[PATH_MAX];
-        Boolean isVolume = CFURLGetFileSystemRepresentation(url, true, path, PATH_MAX)
-            && realpath((const char *)path, resolved) != NULL && strcmp(resolved, st.f_mntonname) == 0;
-        return isVolume ? kCFBooleanTrue : kCFBooleanFalse;
-    }
+        return CFURLIsMountRoot(url) ? kCFBooleanTrue : kCFBooleanFalse;
     return NULL;
 }
 

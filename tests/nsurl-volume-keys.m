@@ -24,6 +24,7 @@ int main(int argc, char **argv)
     {
         NSArray *keys = [@[
             NSURLIsVolumeKey,
+            NSURLTypeIdentifierKey,
             NSURLVolumeIdentifierKey,
             NSURLVolumeIsAutomountedKey,
             NSURLVolumeIsBrowsableKey,
