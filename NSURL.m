@@ -1836,6 +1836,20 @@ Boolean CFURLResourceIsReachable(CFURLRef url, CFErrorRef *error)
     return false;
 }
 
+// Hands the CFError a CoreFoundation function created (it is owned by the caller) to an NSError ** as an
+// autoreleased NSError, or drops it when the caller does not want it.
+static void CFURLReturnError(CFErrorRef cfError, NSError **error)
+{
+    if (error != NULL)
+    {
+        *error = [(NSError *)cfError autorelease];
+    }
+    else if (cfError != NULL)
+    {
+        CFRelease(cfError);
+    }
+}
+
 @implementation NSURL
 
 @dynamic dataRepresentation; // implemented in Foundation's NSURL category, built on CFURLCreateData
@@ -1934,8 +1948,10 @@ Boolean CFURLResourceIsReachable(CFURLRef url, CFErrorRef *error)
 {
     [self release];
     Boolean stale = NO;
+    CFErrorRef cfError = NULL;
     CFURLRef relative = [relativeURL _cfurl];
-    CFURLRef url = CFURLCreateByResolvingBookmarkData(kCFAllocatorDefault, (CFDataRef)bookmarkData, options, relative, NULL, &stale, (CFErrorRef *)error);
+    CFURLRef url = CFURLCreateByResolvingBookmarkData(kCFAllocatorDefault, (CFDataRef)bookmarkData, options, relative, NULL, &stale, &cfError);
+    CFURLReturnError(cfError, error);
 
     if (isStale)
     {
@@ -1947,7 +1963,10 @@ Boolean CFURLResourceIsReachable(CFURLRef url, CFErrorRef *error)
 
 - (NSData *)bookmarkDataWithOptions:(NSURLBookmarkCreationOptions)options includingResourceValuesForKeys:(NSArray *)keys relativeToURL:(NSURL *)relativeURL error:(NSError **)error
 {
-    return [(NSData *)CFURLCreateBookmarkData(kCFAllocatorDefault, [self _cfurl], options, (CFArrayRef)keys, (CFURLRef)relativeURL, (CFErrorRef *)error) autorelease];
+    CFErrorRef cfError = NULL;
+    NSData *data = (NSData *)CFURLCreateBookmarkData(kCFAllocatorDefault, [self _cfurl], options, (CFArrayRef)keys, (CFURLRef)relativeURL, &cfError);
+    CFURLReturnError(cfError, error);
+    return [data autorelease];
 }
 
 - (NSURL *)filePathURL
