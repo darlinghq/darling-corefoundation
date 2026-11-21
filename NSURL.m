@@ -260,6 +260,7 @@ static CFErrorRef UTLoadError;
 static CFStringRef (*UTCreatePreferredIdentifierForTag)(CFStringRef, CFStringRef, CFStringRef);
 static Boolean (*UTConformsTo)(CFStringRef, CFStringRef);
 static CFStringRef *UTTagClassFilenameExtension;
+static OSStatus (*LSCopyKind)(CFURLRef, CFStringRef *);
 
 static void CFURLLoadLaunchServices(void *context)
 {
@@ -272,6 +273,7 @@ static void CFURLLoadLaunchServices(void *context)
     UTCreatePreferredIdentifierForTag = dlsym(UTLaunchServicesHandle, "UTTypeCreatePreferredIdentifierForTag");
     UTConformsTo = dlsym(UTLaunchServicesHandle, "UTTypeConformsTo");
     UTTagClassFilenameExtension = dlsym(UTLaunchServicesHandle, "kUTTagClassFilenameExtension");
+    LSCopyKind = dlsym(UTLaunchServicesHandle, "LSCopyKindStringForURL");
     if (UTCreatePreferredIdentifierForTag == NULL || UTConformsTo == NULL || UTTagClassFilenameExtension == NULL)
         dlError(&UTLoadError);
 }
@@ -280,6 +282,30 @@ static void CFURLEnsureLaunchServices(void)
 {
     static dispatch_once_t once;
     dispatch_once_f(&once, NULL, CFURLLoadLaunchServices);
+}
+
+// The item's kind ("Folder", "Application", ...) is what LaunchServices names it.
+// Test: tests/URLLocalizedTypeDescription.m
+static CFStringRef CFURLCreateLocalizedTypeDescription(CFURLRef url, CFErrorRef *error)
+{
+    struct stat info;
+    if (!CFURLStat(url, &info))
+    {
+        resourceReadError(error);
+        return NULL;
+    }
+
+    CFURLEnsureLaunchServices();
+    CFStringRef kind = NULL;
+    if (LSCopyKind == NULL)
+    {
+        if (error != NULL && UTLoadError != NULL)
+            *error = (CFErrorRef)CFRetain(UTLoadError);
+        return NULL;
+    }
+    if (LSCopyKind(url, &kind) != 0)
+        kind = NULL;
+    return kind;
 }
 
 // Whether the URL's path, with symbolic links resolved, is the mount point of the volume it is on.
@@ -877,7 +903,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
     else if (CFEqual(key, kCFURLLocalizedTypeDescriptionKey))
     {
         // Key for the resource’s localized type description, returned as a CFString object.
-
+        value = CFURLCreateLocalizedTypeDescription(url, error);
     }
     else if (CFEqual(key, kCFURLLabelNumberKey))
     {
