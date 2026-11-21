@@ -11,6 +11,7 @@
 #import <CoreFoundation/CFString.h>
 #import <CoreFoundation/CFURL.h>
 #import <CoreFoundation/CFDictionary.h>
+#import <CoreFoundation/CFPropertyList.h>
 #import "CFInternal.h"
 #import "CFPriv.h"
 #import <CoreFoundation/CFURLPriv.h>
@@ -22,6 +23,9 @@
 #include <sys/xattr.h>
 #include <dlfcn.h>
 #include <limits.h>
+#include <stdio.h>
+#include <string.h>
+#include <errno.h>
 
 #define STACK_BUFFER_SIZE 100 // pretty safe bet this will be quite unlikely to use more than this since there are only 94 properties
 
@@ -1461,6 +1465,345 @@ Boolean CFURLWriteBookmarkDataToFile(CFDataRef bookmarkRef, CFURLRef fileURL, CF
     return false;
 }
 
+// Bookmark data is opaque to callers and is not compatible with macOS bookmark data (it cannot be
+// exchanged with a Mac). It is the four bytes "DLBK" and a binary property list of: the item's POSIX path,
+// its path relative to the URL the bookmark was made relative to (when it lies below it), its inode
+// number, and the resource values asked for. A URL that is not a file URL is kept as its string.
+// Data that is a bare absolute path, what earlier versions made, still resolves.
+static const UInt8 CFURLBookmarkMagic[4] = { 'D', 'L', 'B', 'K' };
+static const CFStringRef CFURLBookmarkPathKey = CFSTR("path");
+static const CFStringRef CFURLBookmarkRelativePathKey = CFSTR("relativePath");
+static const CFStringRef CFURLBookmarkInodeKey = CFSTR("inode");
+static const CFStringRef CFURLBookmarkURLKey = CFSTR("url");
+static const CFStringRef CFURLBookmarkResourceValuesKey = CFSTR("resourceValues");
+// A CFURL resource value is kept as a dictionary with its string under this key.
+static const CFStringRef CFURLBookmarkURLValueKey = CFSTR("DLURL");
+
+static void CFURLBookmarkSetSInt64(CFMutableDictionaryRef record, CFStringRef key, SInt64 number)
+{
+    CFNumberRef value = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt64Type, &number);
+    CFDictionarySetValue(record, key, value);
+    CFRelease(value);
+}
+
+// The path of the item below the path of the URL the bookmark is made relative to (that path is taken as a
+// directory), or NULL.
+// GUESS: the documentation says relativeToURL is usually the document that owns the bookmark, which the
+// item need not lie below; it does not say how the data is made relative. Only the case of an item below
+// the URL is handled.
+static CFStringRef CFURLBookmarkCopyRelativePath(CFURLRef relativeToURL, const UInt8 *path)
+{
+    UInt8 base[PATH_MAX] = { 0 };
+
+    if (relativeToURL == NULL || !CFURLGetFileSystemRepresentation(relativeToURL, true, base, PATH_MAX))
+    {
+        return NULL;
+    }
+
+    size_t length = strlen((const char *)base);
+    while (length > 0 && base[length - 1] == '/')
+    {
+        length--;
+    }
+    if (strncmp((const char *)path, (const char *)base, length) != 0 || path[length] != '/' || path[length + 1] == 0)
+    {
+        return NULL;
+    }
+    return CFStringCreateWithFileSystemRepresentation(kCFAllocatorDefault, (const char *)path + length + 1);
+}
+
+// Only values a property list holds are kept, and a CFURL as a dictionary; any other kind is left out.
+static CFTypeRef CFURLBookmarkCopyStorableValue(CFTypeRef value)
+{
+    CFTypeID type = CFGetTypeID(value);
+
+    if (type == CFStringGetTypeID() || type == CFDataGetTypeID() || type == CFDateGetTypeID() ||
+        type == CFNumberGetTypeID() || type == CFBooleanGetTypeID())
+    {
+        return CFRetain(value);
+    }
+    if (type == CFURLGetTypeID())
+    {
+        CFURLRef absolute = CFURLCopyAbsoluteURL((CFURLRef)value);
+        CFTypeRef string = CFURLGetString(absolute);
+        CFDictionaryRef wrapped = CFDictionaryCreate(kCFAllocatorDefault, (const void **)&CFURLBookmarkURLValueKey, &string, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        CFRelease(absolute);
+        return wrapped;
+    }
+    return NULL;
+}
+
+static CFTypeRef CFURLBookmarkCopyStoredValue(CFTypeRef value)
+{
+    if (CFGetTypeID(value) == CFDictionaryGetTypeID())
+    {
+        CFStringRef string = CFDictionaryGetValue((CFDictionaryRef)value, CFURLBookmarkURLValueKey);
+        if (string != NULL && CFGetTypeID(string) == CFStringGetTypeID())
+        {
+            return CFURLCreateWithString(kCFAllocatorDefault, string, NULL);
+        }
+    }
+    return CFRetain(value);
+}
+
+static void CFURLBookmarkCorruptError(CFErrorRef *error)
+{
+    if (error != NULL)
+    {
+        // GUESS: the documentation lists no error codes; 259 is NSFileReadCorruptFileError.
+        *error = CFErrorCreate(kCFAllocatorDefault, kCFErrorDomainCocoa, 259, NULL);
+    }
+}
+
+// The record's value for the key if it has the given type: bookmark data from outside is not trusted.
+static CFTypeRef CFURLBookmarkGetValue(CFDictionaryRef record, CFStringRef key, CFTypeID type)
+{
+    CFTypeRef value = CFDictionaryGetValue(record, key);
+    return (value != NULL && CFGetTypeID(value) == type) ? value : NULL;
+}
+
+// The record the data holds, or NULL (with an error) when it is not bookmark data.
+static CFDictionaryRef CFURLBookmarkCopyRecord(CFDataRef bookmark, CFErrorRef *error)
+{
+    CFIndex length = CFDataGetLength(bookmark);
+    const UInt8 *bytes = CFDataGetBytePtr(bookmark);
+    CFDictionaryRef record = NULL;
+
+    if (length > 0 && bytes[0] == '/')
+    {
+        CFStringRef path = CFStringCreateWithBytes(kCFAllocatorDefault, bytes, length, kCFStringEncodingUTF8, false);
+        if (path != NULL)
+        {
+            record = CFDictionaryCreate(kCFAllocatorDefault, (const void **)&CFURLBookmarkPathKey, (const void **)&path, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+            CFRelease(path);
+        }
+    }
+    else if (length > (CFIndex)sizeof(CFURLBookmarkMagic) && memcmp(bytes, CFURLBookmarkMagic, sizeof(CFURLBookmarkMagic)) == 0)
+    {
+        CFDataRef list = CFDataCreateWithBytesNoCopy(kCFAllocatorDefault, bytes + sizeof(CFURLBookmarkMagic), length - sizeof(CFURLBookmarkMagic), kCFAllocatorNull);
+        CFPropertyListRef parsed = CFPropertyListCreateWithData(kCFAllocatorDefault, list, kCFPropertyListImmutable, NULL, NULL);
+        CFRelease(list);
+        if (parsed != NULL && CFGetTypeID(parsed) == CFDictionaryGetTypeID())
+        {
+            if (CFURLBookmarkGetValue(parsed, CFURLBookmarkPathKey, CFStringGetTypeID()) != NULL ||
+                CFURLBookmarkGetValue(parsed, CFURLBookmarkURLKey, CFStringGetTypeID()) != NULL)
+            {
+                record = parsed;
+                parsed = NULL;
+            }
+        }
+        if (parsed != NULL)
+        {
+            CFRelease(parsed);
+        }
+    }
+
+    if (record == NULL)
+    {
+        CFURLBookmarkCorruptError(error);
+    }
+    return record;
+}
+
+// Resolves to the URL of the item the record names: the path relative to relativeToURL and the absolute
+// path are candidates, and the first one that has the recorded inode wins (else the first that exists).
+// This system has no lookup of a file by its ID, so an item that moved is not found.
+// The data is stale when the item found does not have the recorded inode. That is only a heuristic: the
+// inode of a file saved by writing a new file and renaming it over the old one changes, and a file system
+// may reuse the inode of a deleted file, so replacement is not always seen. The device number is not
+// compared: it is not stable for every file system (a union or overlay file system hands out its own).
+// GUESS: the documentation does not say when bookmark data is stale beyond "needs to be recreated", nor
+// which error a missing item is reported with (260, NSFileReadNoSuchFileError, here).
+CFURLRef CFURLCreateByResolvingBookmarkData(CFAllocatorRef allocator, CFDataRef bookmark, CFURLBookmarkResolutionOptions options, CFURLRef relativeToURL, CFArrayRef resourcePropertiesToInclude, Boolean* isStale, CFErrorRef* error)
+{
+    if (isStale != NULL)
+        *isStale = false;
+    if (error != NULL)
+        *error = NULL;
+    if (bookmark == NULL)
+        return NULL;
+
+    CFDictionaryRef record = CFURLBookmarkCopyRecord(bookmark, error);
+    if (record == NULL)
+        return NULL;
+
+    CFURLRef result = NULL;
+    CFStringRef urlString = CFURLBookmarkGetValue(record, CFURLBookmarkURLKey, CFStringGetTypeID());
+    if (urlString != NULL)
+    {
+        result = CFURLCreateWithString(allocator, urlString, NULL);
+        CFRelease(record);
+        return result;
+    }
+
+    char candidates[2][PATH_MAX];
+    int count = 0;
+    CFStringRef relativePath = CFURLBookmarkGetValue(record, CFURLBookmarkRelativePathKey, CFStringGetTypeID());
+    UInt8 base[PATH_MAX] = { 0 };
+    if (relativePath != NULL && relativeToURL != NULL && CFURLGetFileSystemRepresentation(relativeToURL, true, base, PATH_MAX))
+    {
+        char relative[PATH_MAX];
+        if (CFStringGetFileSystemRepresentation(relativePath, relative, sizeof(relative)) &&
+            snprintf(candidates[count], PATH_MAX, "%s/%s", (const char *)base, relative) < PATH_MAX)
+        {
+            count++;
+        }
+    }
+    CFStringRef path = CFURLBookmarkGetValue(record, CFURLBookmarkPathKey, CFStringGetTypeID());
+    if (path != NULL && CFStringGetFileSystemRepresentation(path, candidates[count], PATH_MAX))
+    {
+        count++;
+    }
+
+    CFNumberRef inode = CFURLBookmarkGetValue(record, CFURLBookmarkInodeKey, CFNumberGetTypeID());
+    SInt64 recordedInode = 0;
+    Boolean knowsInode = inode != NULL && CFNumberGetValue(inode, kCFNumberSInt64Type, &recordedInode);
+    int failure = ENOENT;
+    int chosen = -1;
+    Boolean matched = false;
+    struct stat chosenInfo;
+    for (int i = 0; i < count; i++)
+    {
+        struct stat info;
+        if (lstat(candidates[i], &info) == -1)
+        {
+            failure = errno;
+            continue;
+        }
+
+        Boolean identity = knowsInode && recordedInode == (SInt64)info.st_ino;
+        if (chosen < 0 || (identity && !matched))
+        {
+            chosen = i;
+            chosenInfo = info;
+            matched = identity;
+        }
+        if (identity)
+        {
+            break;
+        }
+    }
+    if (chosen >= 0)
+    {
+        if (isStale != NULL && knowsInode)
+        {
+            *isStale = !matched;
+        }
+        result = CFURLCreateFromFileSystemRepresentation(allocator, (const UInt8 *)candidates[chosen], strlen(candidates[chosen]), S_ISDIR(chosenInfo.st_mode));
+    }
+    if (result == NULL)
+    {
+        cocoaReadError(error, failure);
+    }
+    CFRelease(record);
+    return result;
+}
+
+// A bookmark of an item that does not exist is not made, and neither is one of an item whose path is not
+// valid UTF-8 (the path is kept as a string).
+// GUESS: the documentation only says that failure returns nil; the errors reported here are 260
+// (NSFileReadNoSuchFileError) for a missing item and 256 (NSFileReadUnknownError) for the other cases.
+CFDataRef CFURLCreateBookmarkData(CFAllocatorRef allocator, CFURLRef url, CFURLBookmarkCreationOptions options, CFArrayRef resourcePropertiesToInclude, CFURLRef relativeToURL, CFErrorRef *error)
+{
+    if (error != NULL)
+        *error = NULL;
+    if (url == NULL)
+        return NULL;
+
+    CFMutableDictionaryRef record = CFDictionaryCreateMutable(kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFStringRef scheme = CFURLCopyScheme(url);
+    Boolean isFile = scheme != NULL && CFStringCompare(scheme, CFSTR("file"), kCFCompareCaseInsensitive) == kCFCompareEqualTo;
+    if (scheme != NULL)
+        CFRelease(scheme);
+
+    if (!isFile)
+    {
+        // A URL that is not a file URL is kept alone: the options and keys do not apply.
+        CFURLRef absolute = CFURLCopyAbsoluteURL(url);
+        CFDictionarySetValue(record, CFURLBookmarkURLKey, CFURLGetString(absolute));
+        CFRelease(absolute);
+    }
+    else
+    {
+        UInt8 path[PATH_MAX] = { 0 };
+        struct stat info;
+        int failure = EINVAL;
+        Boolean found = false;
+        if (CFURLGetFileSystemRepresentation(url, true, path, PATH_MAX))
+        {
+            found = lstat((const char *)path, &info) != -1;
+            if (!found)
+            {
+                failure = errno;
+            }
+        }
+        if (found)
+        {
+            // NULL when the path is not valid UTF-8.
+            CFStringRef pathString = CFStringCreateWithFileSystemRepresentation(kCFAllocatorDefault, (const char *)path);
+            if (pathString == NULL)
+            {
+                failure = EILSEQ;
+            }
+            else
+            {
+                CFDictionarySetValue(record, CFURLBookmarkPathKey, pathString);
+                CFRelease(pathString);
+            }
+            CFURLBookmarkSetSInt64(record, CFURLBookmarkInodeKey, (SInt64)info.st_ino);
+
+            CFStringRef relativePath = CFURLBookmarkCopyRelativePath(relativeToURL, path);
+            if (relativePath != NULL)
+            {
+                CFDictionarySetValue(record, CFURLBookmarkRelativePathKey, relativePath);
+                CFRelease(relativePath);
+            }
+
+            CFIndex keyCount = resourcePropertiesToInclude != NULL ? CFArrayGetCount(resourcePropertiesToInclude) : 0;
+            if (keyCount > 0)
+            {
+                CFMutableDictionaryRef values = CFDictionaryCreateMutable(kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+                for (CFIndex i = 0; i < keyCount; i++)
+                {
+                    CFStringRef key = CFArrayGetValueAtIndex(resourcePropertiesToInclude, i);
+                    CFTypeRef value = NULL;
+                    if (CFURLCopyResourcePropertyForKey(url, key, &value, NULL) && value != NULL)
+                    {
+                        CFTypeRef storable = CFURLBookmarkCopyStorableValue(value);
+                        if (storable != NULL)
+                        {
+                            CFDictionarySetValue(values, key, storable);
+                            CFRelease(storable);
+                        }
+                    }
+                    if (value != NULL)
+                        CFRelease(value);
+                }
+                CFDictionarySetValue(record, CFURLBookmarkResourceValuesKey, values);
+                CFRelease(values);
+            }
+        }
+        if (CFDictionaryGetValue(record, CFURLBookmarkPathKey) == NULL)
+        {
+            cocoaReadError(error, failure);
+            CFRelease(record);
+            return NULL;
+        }
+    }
+
+    CFDataRef list = CFPropertyListCreateData(kCFAllocatorDefault, record, kCFPropertyListBinaryFormat_v1_0, 0, error);
+    CFRelease(record);
+    if (list == NULL)
+    {
+        return NULL;
+    }
+    CFMutableDataRef data = CFDataCreateMutable(allocator, 0);
+    CFDataAppendBytes(data, CFURLBookmarkMagic, sizeof(CFURLBookmarkMagic));
+    CFDataAppendBytes(data, CFDataGetBytePtr(list), CFDataGetLength(list));
+    CFRelease(list);
+    return data;
+}
+
 CFTypeRef CFURLCreateResourcePropertyForKeyFromBookmarkData(CFAllocatorRef allocator, CFStringRef resourcePropertyToReturn, CFDataRef bookmark)
 {
 #warning TODO: FIXME
@@ -1471,53 +1814,6 @@ CFDictionaryRef CFURLCreateResourcePropertiesForKeysFromBookmarkData(CFAllocator
 {
 #warning TODO: FIXME
     return NULL;
-}
-
-// Bookmark data is the raw UTF-8 POSIX path. It is opaque to callers and is not
-// compatible with macOS bookmark data (it cannot be exchanged with a Mac).
-CFURLRef CFURLCreateByResolvingBookmarkData(CFAllocatorRef allocator, CFDataRef bookmark, CFURLBookmarkResolutionOptions options, CFURLRef relativeToURL, CFArrayRef resourcePropertiesToInclude, Boolean* isStale, CFErrorRef* error)
-{
-    if (bookmark == NULL)
-        return NULL;
-    CFIndex len = CFDataGetLength(bookmark);
-    if (len <= 0)
-        return NULL;
-    const UInt8 *bytes = CFDataGetBytePtr(bookmark);
-    CFStringRef path = CFStringCreateWithBytes(allocator, bytes, len, kCFStringEncodingUTF8, false);
-    if (path == NULL)
-        return NULL;
-    CFURLRef url = CFURLCreateWithFileSystemPath(allocator, path, kCFURLPOSIXPathStyle, true);
-    CFRelease(path);
-    if (isStale != NULL)
-        *isStale = false;
-    return url;
-}
-
-// Bookmark data is the raw UTF-8 POSIX path. It is opaque to callers and is not
-// compatible with macOS bookmark data (it cannot be exchanged with a Mac).
-CFDataRef CFURLCreateBookmarkData(CFAllocatorRef allocator, CFURLRef url, CFURLBookmarkCreationOptions options, CFArrayRef resourcePropertiesToInclude, CFURLRef relativeToURL, CFErrorRef *error)
-{
-    if (url == NULL)
-        return NULL;
-    CFStringRef path = CFURLCopyFileSystemPath(url, kCFURLPOSIXPathStyle);
-    if (path == NULL)
-        return NULL;
-    CFIndex len = CFStringGetLength(path);
-    CFIndex maxLen = CFStringGetMaximumSizeForEncoding(len, kCFStringEncodingUTF8);
-    if (maxLen <= 0) {
-        CFRelease(path);
-        return NULL;
-    }
-    char *buf = malloc(maxLen + 1);
-    if (!buf) {
-        CFRelease(path);
-        return NULL;
-    }
-    CFStringGetCString(path, buf, maxLen + 1, kCFStringEncodingUTF8);
-    CFRelease(path);
-    CFDataRef data = CFDataCreate(allocator, (const UInt8 *)buf, strlen(buf));
-    free(buf);
-    return data;
 }
 
 Boolean CFURLResourceIsReachable(CFURLRef url, CFErrorRef *error)
