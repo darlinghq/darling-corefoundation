@@ -81,9 +81,12 @@ int main(void)
             caught = e;
         }
         CHECK(caught == thrown, "the caught NSException is the thrown object");
+#if __LP64__
+        // The recording comes from the exception preprocessor, which only the 64-bit slice installs.
         CHECK([[caught callStackSymbols] count] > 0, "a thrown NSException has call stack symbols");
         CHECK([[caught callStackReturnAddresses] count] == [[caught callStackSymbols] count],
               "a thrown NSException has one return address per symbol");
+#endif
     }
 
     // The same for an NSException subclass
@@ -96,7 +99,9 @@ int main(void)
             caught = other;
         }
         CHECK(caught == thrown, "the caught NSException subclass instance is the thrown object");
+#if __LP64__
         CHECK([[caught callStackSymbols] count] > 0, "a thrown NSException subclass has call stack symbols");
+#endif
     }
 
     // A root class, last: it answers retain and release only, so it does not respond to isKindOfClass:
