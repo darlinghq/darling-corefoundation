@@ -678,19 +678,34 @@ SINGLETON_RR()
 
     [otherDictionary getObjects:objects andKeys:keys];
 
+    BOOL *copied = count > 0 ? calloc(count, sizeof(BOOL)) : NULL;
+    if (count > 0 && UNLIKELY(copied == NULL))
+    {
+        free(objects);
+        free(keys);
+        [self release];
+        return NULL;
+    }
+
     for (int i = 0 ; i < count; i++)
     {
+        // -initWithObjects:forKeys:count: retains each value, so a value is not retained here; a copy is
+        // released after the dictionary has retained it.
         if (flag && [objects[i] respondsToSelector:@selector(copyWithZone:)])
         {
             objects[i] = [objects[i] copy];
-        }
-        else
-        {
-            objects[i] = [objects[i] retain];
+            copied[i] = YES;
         }
     }
 
     id dict = [self initWithObjects:objects forKeys:keys count:count];
+
+    for (int i = 0 ; i < count; i++)
+    {
+        if (copied[i])
+            [objects[i] release];
+    }
+    free(copied);
 
     if (objects != NULL)
     {
