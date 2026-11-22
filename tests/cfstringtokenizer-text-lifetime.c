@@ -63,14 +63,23 @@ static CFStringRef make_words(int repetitions)
 
 #define MAX_TOKENS 1024
 
-static int collect(CFStringTokenizerRef tok, CFRange *ranges)
+// types may be NULL
+static int collect_typed(CFStringTokenizerRef tok, CFRange *ranges, CFStringTokenizerTokenType *types)
 {
 	int n = 0;
-	while (CFStringTokenizerAdvanceToNextToken(tok) != kCFStringTokenizerTokenNone && n < MAX_TOKENS) {
+	CFStringTokenizerTokenType t;
+	while ((t = CFStringTokenizerAdvanceToNextToken(tok)) != kCFStringTokenizerTokenNone && n < MAX_TOKENS) {
 		ranges[n] = CFStringTokenizerGetCurrentTokenRange(tok);
+		if (types)
+			types[n] = t;
 		n++;
 	}
 	return n;
+}
+
+static int collect(CFStringTokenizerRef tok, CFRange *ranges)
+{
+	return collect_typed(tok, ranges, NULL);
 }
 
 // WordBoundary returns every word and every space between words, in order.
@@ -141,7 +150,10 @@ static void test_set_string(void)
 
 	// replace the text with a long one: the new text must stay alive after SetString returns
 	CFStringRef longer = make_words(400);
+	check("set string: first text has a first token", CFStringTokenizerAdvanceToNextToken(tok) != kCFStringTokenizerTokenNone);
 	CFStringTokenizerSetString(tok, longer, CFRangeMake(0, CFStringGetLength(longer)));
+	check("set string: no current token right after SetString",
+	      CFStringTokenizerGetCurrentTokenRange(tok).location == kCFNotFound);
 	clobber_stack();
 	clobber_heap((size_t)CFStringGetLength(longer) * sizeof(UniChar));
 	int n = collect(tok, ranges);
@@ -267,6 +279,119 @@ static void test_paragraph_unit(void)
 	CFRelease(text);
 }
 
+static void test_word_units_and_numbers(void)
+{
+	CFStringRef text = CFSTR("Hello, world 42!");
+	CFRange got[MAX_TOKENS];
+	CFStringTokenizerTokenType types[MAX_TOKENS];
+	const CFStringTokenizerTokenType normal = kCFStringTokenizerTokenNormal;
+	const CFStringTokenizerTokenType numeric = kCFStringTokenizerTokenNormal | kCFStringTokenizerTokenHasHasNumbersMask;
+
+	// UnitWord returns the words only; white space and punctuation are not tokens
+	CFStringTokenizerRef tok = CFStringTokenizerCreate(NULL, text, CFRangeMake(0, CFStringGetLength(text)),
+	                                                  kCFStringTokenizerUnitWord, NULL);
+	check("word: tokenizer created", tok != NULL);
+	if (tok) {
+		const CFRange words[] = { {0, 5}, {7, 5}, {13, 2} };
+		int n = collect_typed(tok, got, types);
+		check("word: Hello, world, 42 and nothing else", ranges_equal(got, n, words, 3));
+		check("word: numbers mask set for 42 only",
+		      n == 3 && types[0] == normal && types[1] == normal && types[2] == numeric);
+		check("word: no current token after the last one",
+		      CFStringTokenizerGetCurrentTokenRange(tok).location == kCFNotFound);
+
+		// go to a token: a word is found from any of its characters, a comma is not a token
+		check("word: go to index 8 finds world", CFStringTokenizerGoToTokenAtIndex(tok, 8) == normal);
+		CFRange r = CFStringTokenizerGetCurrentTokenRange(tok);
+		check("word: index 8 is in {7, 5}", r.location == 7 && r.length == 5);
+		check("word: advance after go to continues with 42", CFStringTokenizerAdvanceToNextToken(tok) == numeric);
+		r = CFStringTokenizerGetCurrentTokenRange(tok);
+		check("word: next token is {13, 2}", r.location == 13 && r.length == 2);
+		check("word: go to index 14 finds 42 with the numbers mask", CFStringTokenizerGoToTokenAtIndex(tok, 14) == numeric);
+		check("word: go to the comma finds no token", CFStringTokenizerGoToTokenAtIndex(tok, 5) == kCFStringTokenizerTokenNone);
+		check("word: go past the end finds no token", CFStringTokenizerGoToTokenAtIndex(tok, 16) == kCFStringTokenizerTokenNone);
+		CFRelease(tok);
+	}
+
+	// UnitWordBoundary keeps returning the separators between the words
+	tok = CFStringTokenizerCreate(NULL, text, CFRangeMake(0, CFStringGetLength(text)),
+	                              kCFStringTokenizerUnitWordBoundary, NULL);
+	check("word boundary: tokenizer created", tok != NULL);
+	if (tok) {
+		const CFRange all[] = { {0, 5}, {5, 1}, {6, 1}, {7, 5}, {12, 1}, {13, 2}, {15, 1} };
+		int n = collect_typed(tok, got, types);
+		check("word boundary: words and separators", ranges_equal(got, n, all, 7));
+		int numberMaskOnlyOn42 = n == 7;
+		for (int i = 0; i < n; i++)
+			numberMaskOnlyOn42 = numberMaskOnlyOn42 && types[i] == (i == 5 ? numeric : normal);
+		check("word boundary: numbers mask set for 42 only", numberMaskOnlyOn42);
+		check("word boundary: go to the comma finds it", CFStringTokenizerGoToTokenAtIndex(tok, 5) == normal);
+		CFRelease(tok);
+	}
+
+	// the number status of a word break iterator means nothing for the other units
+	CFStringRef two = CFSTR("Room 42.\nNext.");
+	CFOptionFlags others[] = { kCFStringTokenizerUnitSentence, kCFStringTokenizerUnitParagraph, kCFStringTokenizerUnitLineBreak };
+	for (int u = 0; u < 3; u++) {
+		tok = CFStringTokenizerCreate(NULL, two, CFRangeMake(0, CFStringGetLength(two)), others[u], NULL);
+		int n = tok ? collect_typed(tok, got, types) : -1;
+		int allNormal = n > 0;
+		for (int i = 0; i < n; i++)
+			allNormal = allNormal && types[i] == normal;
+		check("other units: tokens are plain normal tokens", allNormal);
+		if (tok)
+			CFRelease(tok);
+	}
+}
+
+// The type of the only token of a one-token string.
+static CFStringTokenizerTokenType only_token_type(CFStringRef s, CFOptionFlags unit)
+{
+	CFRange got[MAX_TOKENS];
+	CFStringTokenizerTokenType types[MAX_TOKENS];
+	CFStringTokenizerRef tok = CFStringTokenizerCreate(NULL, s, CFRangeMake(0, CFStringGetLength(s)), unit, NULL);
+	if (!tok)
+		return kCFStringTokenizerTokenNone;
+	int n = collect_typed(tok, got, types);
+	CFRelease(tok);
+	return n == 1 && got[0].location == 0 && got[0].length == CFStringGetLength(s) ? types[0] : kCFStringTokenizerTokenNone;
+}
+
+static void test_number_mask_follows_content(void)
+{
+	const CFStringTokenizerTokenType normal = kCFStringTokenizerTokenNormal;
+	const CFStringTokenizerTokenType numeric = kCFStringTokenizerTokenNormal | kCFStringTokenizerTokenHasHasNumbersMask;
+	CFOptionFlags units[] = { kCFStringTokenizerUnitWord, kCFStringTokenizerUnitWordBoundary };
+
+	// the mask says the token contains a number, wherever the digits are
+	const UniChar arabicIndic[] = { 'a', 0x0663 };
+	CFStringRef nonAscii = CFStringCreateWithCharacters(NULL, arabicIndic, 2);
+	for (int u = 0; u < 2; u++) {
+		check("mask: 42abc has the numbers mask", only_token_type(CFSTR("42abc"), units[u]) == numeric);
+		check("mask: ab42 has the numbers mask", only_token_type(CFSTR("ab42"), units[u]) == numeric);
+		check("mask: 3.14 has the numbers mask", only_token_type(CFSTR("3.14"), units[u]) == numeric);
+		check("mask: a non-ASCII digit (U+0663) has the numbers mask", only_token_type(nonAscii, units[u]) == numeric);
+		check("mask: world has no numbers mask", only_token_type(CFSTR("world"), units[u]) == normal);
+	}
+	CFRelease(nonAscii);
+}
+
+static void test_go_to_negative_index(void)
+{
+	CFStringRef text = CFSTR("Hello, world");
+	CFStringTokenizerRef tok = CFStringTokenizerCreate(NULL, text, CFRangeMake(0, CFStringGetLength(text)),
+	                                                  kCFStringTokenizerUnitWord, NULL);
+	check("negative index: tokenizer created", tok != NULL);
+	if (!tok)
+		return;
+	check("negative index: go to -1 finds no token", CFStringTokenizerGoToTokenAtIndex(tok, -1) == kCFStringTokenizerTokenNone);
+	check("negative index: no current token", CFStringTokenizerGetCurrentTokenRange(tok).location == kCFNotFound);
+	check("negative index: advance still starts at the first word", CFStringTokenizerAdvanceToNextToken(tok) != kCFStringTokenizerTokenNone);
+	CFRange r = CFStringTokenizerGetCurrentTokenRange(tok);
+	check("negative index: first word is {0, 5}", r.location == 0 && r.length == 5);
+	CFRelease(tok);
+}
+
 int main(void)
 {
 	test_short_text_outlives_create();
@@ -274,6 +399,9 @@ int main(void)
 	test_set_string();
 	test_empty_and_single_character();
 	test_paragraph_unit();
+	test_word_units_and_numbers();
+	test_number_mask_follows_content();
+	test_go_to_negative_index();
 
 	printf("%s\n", failures ? "FAILED" : "ALL PASSED");
 	return failures ? 1 : 0;
