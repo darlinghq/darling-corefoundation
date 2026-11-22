@@ -8,6 +8,7 @@
 #include "CFBase.h"
 #include "CFRuntime.h"
 #include "CFStringTokenizer.h"
+#include <stdlib.h>
 #include <unicode/ubrk.h>
 
 #define TYPE_MASK 0x000000FF
@@ -19,6 +20,7 @@ struct __CFStringTokenizer {
     CFOptionFlags _options;
     CFLocaleRef _locale;
     UBreakIterator *_break_itr;
+    UChar *_text; // owned UTF-16 text; the break iterator keeps a pointer to it
 };
 
 static void __CFStringTokenizerDeallocate(CFTypeRef cf) {
@@ -34,6 +36,18 @@ static void __CFStringTokenizerDeallocate(CFTypeRef cf) {
     if (tokenizer->_break_itr) {
         ubrk_close(tokenizer->_break_itr);
     }
+
+    free(tokenizer->_text);
+}
+
+static UChar *__CFStringTokenizerCopyText(CFStringRef string, CFIndex len) {
+    UChar *text = malloc((len + 1) * sizeof(UChar));
+    if (text == NULL) {
+        return NULL;
+    }
+    CFStringGetCharacters(string, CFRangeMake(0, len), (UniChar *)text);
+    text[len] = 0;
+    return text;
 }
 
 
@@ -108,22 +122,14 @@ CFStringTokenizerRef CFStringTokenizerCreate(CFAllocatorRef allocator, CFStringR
             break;
     }
 
-    UChar stack_text[BUFFER_SIZE] = {0};
-    UChar *text = &stack_text[0];
     CFIndex len = CFStringGetLength(string);
-    if (len > BUFFER_SIZE) {
-        text = malloc(len * sizeof(UChar));
-        if (text == NULL) {
-            CFRelease(tokenizer);
-            return NULL;
-        }
+    tokenizer->_text = __CFStringTokenizerCopyText(string, len);
+    if (tokenizer->_text == NULL) {
+        CFRelease(tokenizer);
+        return NULL;
     }
-    CFStringGetCharacters(string, CFRangeMake(0, len), (UniChar *)text);
-    UErrorCode err = 0;
-    tokenizer->_break_itr = ubrk_open(type, cstr, text, len, &err);
-    if (text != &stack_text[0]) {
-        free(text);
-    }
+    UErrorCode err = U_ZERO_ERROR;
+    tokenizer->_break_itr = ubrk_open(type, cstr, tokenizer->_text, len, &err);
 
     if (tokenizer->_break_itr == NULL) {
         CFRelease(tokenizer);
@@ -143,21 +149,19 @@ void CFStringTokenizerSetString(CFStringTokenizerRef tokenizer, CFStringRef stri
 
 #warning TODO: range is not handled currently
 
-    UChar stack_text[BUFFER_SIZE] = { 0 };
-    UChar *text = &stack_text[0];
     CFIndex len = CFStringGetLength(string);
-    if (len > BUFFER_SIZE) {
-        text = malloc(len * sizeof(UChar));
-        if (text == NULL) {
-            return;
-        }
+    UChar *text = __CFStringTokenizerCopyText(string, len);
+    if (text == NULL) {
+        return;
     }
-    CFStringGetCharacters(string, CFRangeMake(0, len), (UniChar *)text);
-    UErrorCode err = 0;
+    UErrorCode err = U_ZERO_ERROR;
     ubrk_setText(tokenizer->_break_itr, text, len, &err);
-    if (text != &stack_text[0]) {
+    if (U_FAILURE(err)) {
         free(text);
-    }  
+        return;
+    }
+    free(tokenizer->_text);
+    tokenizer->_text = text;
 }
 
 CFStringTokenizerTokenType CFStringTokenizerGoToTokenAtIndex(CFStringTokenizerRef tokenizer, CFIndex index) {
