@@ -10,6 +10,7 @@
 #include "CFStringTokenizer.h"
 #include <stdlib.h>
 #include <unicode/ubrk.h>
+#include <unicode/ustring.h>
 
 #define TYPE_MASK 0x000000FF
 
@@ -48,6 +49,20 @@ static UChar *__CFStringTokenizerCopyText(CFStringRef string, CFIndex len) {
     CFStringGetCharacters(string, CFRangeMake(0, len), (UniChar *)text);
     text[len] = 0;
     return text;
+}
+
+// GUESS: a paragraph token runs up to and including its separator, and the separators are CR, LF,
+// CRLF and U+2029 (not NEL or U+2028). The separator set is the one CFStringGetParagraphBounds uses
+// in this repository (isALineSeparatorTypeCharacter with includeLineEndings false, CFString.c)
+// and documents publicly; the tokenizer reference says neither for the paragraph unit.
+static UBreakIterator *__CFStringTokenizerOpenParagraphIterator(const UChar *text, CFIndex len) {
+    static const char rules[] = "$Sep = [\\u000A\\u000D\\u2029];\n"
+                                "[^$Sep]* (\\u000D \\u000A | $Sep) | [^$Sep]+;\n";
+    UChar urules[sizeof(rules)];
+    u_uastrcpy(urules, rules);
+    UParseError parseError;
+    UErrorCode err = U_ZERO_ERROR;
+    return ubrk_openRules(urules, -1, text, len, &parseError, &err);
 }
 
 
@@ -114,8 +129,9 @@ CFStringTokenizerRef CFStringTokenizerCreate(CFAllocatorRef allocator, CFStringR
             type = UBRK_WORD;
             break;
         case kCFStringTokenizerUnitSentence:
-        case kCFStringTokenizerUnitParagraph: // this seems incorrect.
             type = UBRK_SENTENCE;
+            break;
+        case kCFStringTokenizerUnitParagraph: // opened from rules below
             break;
         case kCFStringTokenizerUnitLineBreak:
             type = UBRK_LINE;
@@ -128,8 +144,12 @@ CFStringTokenizerRef CFStringTokenizerCreate(CFAllocatorRef allocator, CFStringR
         CFRelease(tokenizer);
         return NULL;
     }
-    UErrorCode err = U_ZERO_ERROR;
-    tokenizer->_break_itr = ubrk_open(type, cstr, tokenizer->_text, len, &err);
+    if ((options & TYPE_MASK) == kCFStringTokenizerUnitParagraph) {
+        tokenizer->_break_itr = __CFStringTokenizerOpenParagraphIterator(tokenizer->_text, len);
+    } else {
+        UErrorCode err = U_ZERO_ERROR;
+        tokenizer->_break_itr = ubrk_open(type, cstr, tokenizer->_text, len, &err);
+    }
 
     if (tokenizer->_break_itr == NULL) {
         CFRelease(tokenizer);

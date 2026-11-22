@@ -187,12 +187,93 @@ static void test_empty_and_single_character(void)
 	}
 }
 
+// Collects the tokens of a string for one tokenization unit.
+static int tokenize(CFStringRef s, CFOptionFlags unit, CFRange *ranges)
+{
+	CFStringTokenizerRef tok = CFStringTokenizerCreate(NULL, s, CFRangeMake(0, CFStringGetLength(s)), unit, NULL);
+	if (!tok)
+		return -1;
+	int n = collect(tok, ranges);
+	CFRelease(tok);
+	return n;
+}
+
+static int ranges_equal(const CFRange *got, int n, const CFRange *want, int wantCount)
+{
+	if (n != wantCount)
+		return 0;
+	for (int i = 0; i < n; i++)
+		if (got[i].location != want[i].location || got[i].length != want[i].length)
+			return 0;
+	return 1;
+}
+
+static void test_paragraph_unit(void)
+{
+	CFRange got[MAX_TOKENS];
+
+	// a paragraph is not a sentence: "A. B." is two sentences but one paragraph; the separator
+	// belongs to the paragraph it ends
+	const CFRange twoParagraphs[] = { {0, 6}, {6, 2} };
+	int n = tokenize(CFSTR("A. B.\nC."), kCFStringTokenizerUnitParagraph, got);
+	check("paragraph: \"A. B.\\nC.\" is two paragraphs", ranges_equal(got, n, twoParagraphs, 2));
+
+	// CR LF is one separator, CR and LF alone are separators, an empty line is a paragraph
+	const CFRange crlf[] = { {0, 3}, {3, 2}, {5, 2}, {7, 1}, {8, 1} };
+	n = tokenize(CFSTR("a\r\nb\rc\n\nd"), kCFStringTokenizerUnitParagraph, got);
+	check("paragraph: CR LF, CR and LF end a paragraph", ranges_equal(got, n, crlf, 5));
+
+	// U+2029 ends a paragraph; U+0085 (NEL) and U+2028 (line separator) do not
+	const UniChar ps[] = { 'a', 0x2029, 'b' };
+	CFStringRef s = CFStringCreateWithCharacters(NULL, ps, 3);
+	const CFRange psRanges[] = { {0, 2}, {2, 1} };
+	n = tokenize(s, kCFStringTokenizerUnitParagraph, got);
+	check("paragraph: U+2029 ends a paragraph", ranges_equal(got, n, psRanges, 2));
+	CFRelease(s);
+
+	const UniChar notSeparators[] = { 'a', 0x0085, 'b', 0x2028, 'c' };
+	s = CFStringCreateWithCharacters(NULL, notSeparators, 5);
+	const CFRange oneParagraph[] = { {0, 5} };
+	n = tokenize(s, kCFStringTokenizerUnitParagraph, got);
+	check("paragraph: NEL and U+2028 do not end a paragraph", ranges_equal(got, n, oneParagraph, 1));
+	CFRelease(s);
+
+	// no separator at all, the empty string, and a lone separator
+	const CFRange whole[] = { {0, 3} };
+	n = tokenize(CFSTR("abc"), kCFStringTokenizerUnitParagraph, got);
+	check("paragraph: text without a separator is one paragraph", ranges_equal(got, n, whole, 1));
+	n = tokenize(CFSTR(""), kCFStringTokenizerUnitParagraph, got);
+	check("paragraph: empty string has no paragraph", n == 0);
+	const CFRange lone[] = { {0, 1} };
+	n = tokenize(CFSTR("\n"), kCFStringTokenizerUnitParagraph, got);
+	check("paragraph: a lone separator is one paragraph", ranges_equal(got, n, lone, 1));
+
+	// the text must stay alive here too, and SetString must keep the unit
+	CFStringRef text = CFStringCreateWithCString(NULL, "A. B.\nC.", kCFStringEncodingASCII);
+	CFStringTokenizerRef tok = CFStringTokenizerCreate(NULL, text, CFRangeMake(0, CFStringGetLength(text)),
+	                                                  kCFStringTokenizerUnitParagraph, NULL);
+	check("paragraph: tokenizer created", tok != NULL);
+	if (tok) {
+		clobber_stack();
+		n = collect(tok, got);
+		check("paragraph: ranges unchanged after the stack was overwritten", ranges_equal(got, n, twoParagraphs, 2));
+		CFStringRef other = CFSTR("x\ny\nz");
+		CFStringTokenizerSetString(tok, other, CFRangeMake(0, CFStringGetLength(other)));
+		const CFRange three[] = { {0, 2}, {2, 2}, {4, 1} };
+		n = collect(tok, got);
+		check("paragraph: SetString keeps the paragraph unit", ranges_equal(got, n, three, 3));
+		CFRelease(tok);
+	}
+	CFRelease(text);
+}
+
 int main(void)
 {
 	test_short_text_outlives_create();
 	test_long_text_outlives_create();
 	test_set_string();
 	test_empty_and_single_character();
+	test_paragraph_unit();
 
 	printf("%s\n", failures ? "FAILED" : "ALL PASSED");
 	return failures ? 1 : 0;
