@@ -759,6 +759,8 @@ extern CFAllocatorRef __CFAllocatorGetAllocator(CFTypeRef);
 
 CFAllocatorRef CFGetAllocator(CFTypeRef cf) {
     if (NULL == cf) return kCFAllocatorSystemDefault;
+    // An Objective-C object has no CF header that records an allocator
+    if (!_CFIsCFObject(cf)) return kCFAllocatorSystemDefault;
     if (__kCFAllocatorTypeID_CONST == __CFGenericTypeID_inline(cf)) {
 	return __CFAllocatorGetAllocator(cf);
     }

@@ -8,7 +8,11 @@
 #include "CFBase.h"
 #include "CFRuntime.h"
 #include "CFStringTokenizer.h"
+#include <stdlib.h>
 #include <unicode/ubrk.h>
+#include <unicode/uchar.h>
+#include <unicode/ustring.h>
+#include <unicode/utf16.h>
 
 #define TYPE_MASK 0x000000FF
 
@@ -19,6 +23,8 @@ struct __CFStringTokenizer {
     CFOptionFlags _options;
     CFLocaleRef _locale;
     UBreakIterator *_break_itr;
+    UChar *_text; // owned UTF-16 text; the break iterator keeps a pointer to it
+    CFRange _token; // the current token, {kCFNotFound, 0} when there is none
 };
 
 static void __CFStringTokenizerDeallocate(CFTypeRef cf) {
@@ -34,8 +40,71 @@ static void __CFStringTokenizerDeallocate(CFTypeRef cf) {
     if (tokenizer->_break_itr) {
         ubrk_close(tokenizer->_break_itr);
     }
+
+    free(tokenizer->_text);
 }
 
+static UChar *__CFStringTokenizerCopyText(CFStringRef string, CFIndex len) {
+    UChar *text = malloc((len + 1) * sizeof(UChar));
+    if (text == NULL) {
+        return NULL;
+    }
+    CFStringGetCharacters(string, CFRangeMake(0, len), (UniChar *)text);
+    text[len] = 0;
+    return text;
+}
+
+// GUESS: a paragraph token runs up to and including its separator, and the separators are CR, LF,
+// CRLF and U+2029 (not NEL or U+2028). The separator set is the one CFStringGetParagraphBounds uses
+// in this repository (isALineSeparatorTypeCharacter with includeLineEndings false, CFString.c)
+// and documents publicly; the tokenizer reference says neither for the paragraph unit.
+static UBreakIterator *__CFStringTokenizerOpenParagraphIterator(const UChar *text, CFIndex len) {
+    static const char rules[] = "$Sep = [\\u000A\\u000D\\u2029];\n"
+                                "[^$Sep]* (\\u000D \\u000A | $Sep) | [^$Sep]+;\n";
+    UChar urules[sizeof(rules)];
+    u_uastrcpy(urules, rules);
+    UParseError parseError;
+    UErrorCode err = U_ZERO_ERROR;
+    return ubrk_openRules(urules, -1, text, len, &parseError, &err);
+}
+
+static CFStringTokenizerTokenType __CFStringTokenizerInvalidateToken(struct __CFStringTokenizer *tokenizer) {
+    tokenizer->_token = CFRangeMake(kCFNotFound, 0);
+    return kCFStringTokenizerTokenNone;
+}
+
+static Boolean __CFStringTokenizerHasDigit(const UChar *text, int32_t start, int32_t end) {
+    int32_t i = start;
+    while (i < end) {
+        UChar32 c;
+        U16_NEXT(text, i, end, c);
+        if (u_isdigit(c)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Classifies the segment [start, end) the break iterator just produced; status is its ICU rule
+// status. Returns kCFStringTokenizerTokenNone for a segment that is not a token of the unit.
+// GUESS: kCFStringTokenizerUnitWord skips the segments ICU gives no word status (white space,
+// punctuation, symbols); the reference only says that UnitWordBoundary also returns the space
+// between words. The number mask ("appears to contain a number") is set for a token that
+// contains a decimal digit (general category Nd), for both word units.
+static CFStringTokenizerTokenType __CFStringTokenizerSegmentType(struct __CFStringTokenizer *tokenizer, int32_t status, int32_t start, int32_t end) {
+    CFOptionFlags unit = tokenizer->_options & TYPE_MASK;
+    if (unit != kCFStringTokenizerUnitWord && unit != kCFStringTokenizerUnitWordBoundary) {
+        return kCFStringTokenizerTokenNormal;
+    }
+
+    if (status >= UBRK_WORD_NONE && status < UBRK_WORD_NONE_LIMIT && unit == kCFStringTokenizerUnitWord) {
+        return kCFStringTokenizerTokenNone;
+    }
+    if (__CFStringTokenizerHasDigit(tokenizer->_text, start, end)) {
+        return kCFStringTokenizerTokenNormal | kCFStringTokenizerTokenHasHasNumbersMask;
+    }
+    return kCFStringTokenizerTokenNormal;
+}
 
 static CFTypeID __kCFStringTokenizerTypeID = _kCFRuntimeNotATypeID;
 
@@ -100,29 +169,26 @@ CFStringTokenizerRef CFStringTokenizerCreate(CFAllocatorRef allocator, CFStringR
             type = UBRK_WORD;
             break;
         case kCFStringTokenizerUnitSentence:
-        case kCFStringTokenizerUnitParagraph: // this seems incorrect.
             type = UBRK_SENTENCE;
+            break;
+        case kCFStringTokenizerUnitParagraph: // opened from rules below
             break;
         case kCFStringTokenizerUnitLineBreak:
             type = UBRK_LINE;
             break;
     }
 
-    UChar stack_text[BUFFER_SIZE] = {0};
-    UChar *text = &stack_text[0];
     CFIndex len = CFStringGetLength(string);
-    if (len > BUFFER_SIZE) {
-        text = malloc(len * sizeof(UChar));
-        if (text == NULL) {
-            CFRelease(tokenizer);
-            return NULL;
-        }
+    tokenizer->_text = __CFStringTokenizerCopyText(string, len);
+    if (tokenizer->_text == NULL) {
+        CFRelease(tokenizer);
+        return NULL;
     }
-    CFStringGetCharacters(string, CFRangeMake(0, len), (UniChar *)text);
-    UErrorCode err = 0;
-    tokenizer->_break_itr = ubrk_open(type, cstr, text, len, &err);
-    if (text != &stack_text[0]) {
-        free(text);
+    if ((options & TYPE_MASK) == kCFStringTokenizerUnitParagraph) {
+        tokenizer->_break_itr = __CFStringTokenizerOpenParagraphIterator(tokenizer->_text, len);
+    } else {
+        UErrorCode err = U_ZERO_ERROR;
+        tokenizer->_break_itr = ubrk_open(type, cstr, tokenizer->_text, len, &err);
     }
 
     if (tokenizer->_break_itr == NULL) {
@@ -130,6 +196,7 @@ CFStringTokenizerRef CFStringTokenizerCreate(CFAllocatorRef allocator, CFStringR
         return NULL;
     }
 
+    __CFStringTokenizerInvalidateToken(tokenizer);
     return tokenizer;
 }
 
@@ -143,45 +210,63 @@ void CFStringTokenizerSetString(CFStringTokenizerRef tokenizer, CFStringRef stri
 
 #warning TODO: range is not handled currently
 
-    UChar stack_text[BUFFER_SIZE] = { 0 };
-    UChar *text = &stack_text[0];
     CFIndex len = CFStringGetLength(string);
-    if (len > BUFFER_SIZE) {
-        text = malloc(len * sizeof(UChar));
-        if (text == NULL) {
-            return;
-        }
+    UChar *text = __CFStringTokenizerCopyText(string, len);
+    if (text == NULL) {
+        return;
     }
-    CFStringGetCharacters(string, CFRangeMake(0, len), (UniChar *)text);
-    UErrorCode err = 0;
+    UErrorCode err = U_ZERO_ERROR;
     ubrk_setText(tokenizer->_break_itr, text, len, &err);
-    if (text != &stack_text[0]) {
+    if (U_FAILURE(err)) {
         free(text);
-    }  
+        return;
+    }
+    free(tokenizer->_text);
+    tokenizer->_text = text;
+    __CFStringTokenizerInvalidateToken(tokenizer);
 }
 
 CFStringTokenizerTokenType CFStringTokenizerGoToTokenAtIndex(CFStringTokenizerRef tokenizer, CFIndex index) {
-    int32_t res = ubrk_following(tokenizer->_break_itr, index);
-    if (res == UBRK_DONE) {
-        return kCFStringTokenizerTokenNone;
-    } else {
-        return kCFStringTokenizerTokenNormal;
+    if (index < 0) {
+        return __CFStringTokenizerInvalidateToken(tokenizer);
     }
+    int32_t end = ubrk_following(tokenizer->_break_itr, index);
+    if (end == UBRK_DONE) {
+        return __CFStringTokenizerInvalidateToken(tokenizer);
+    }
+
+    // the status describes the segment that ends at end; read it before moving the iterator
+    int32_t status = ubrk_getRuleStatus(tokenizer->_break_itr);
+    int32_t start = ubrk_previous(tokenizer->_break_itr);
+    ubrk_next(tokenizer->_break_itr);
+    CFStringTokenizerTokenType type = __CFStringTokenizerSegmentType(tokenizer, status, start, end);
+    if (type == kCFStringTokenizerTokenNone) {
+        // GUESS: an index inside a segment the unit skips finds no token and leaves the iterator after that segment.
+        return __CFStringTokenizerInvalidateToken(tokenizer);
+    }
+
+    tokenizer->_token = CFRangeMake(start, end - start);
+    return type;
 }
 
 CFStringTokenizerTokenType CFStringTokenizerAdvanceToNextToken(CFStringTokenizerRef tokenizer) {
-    int32_t type = ubrk_next(tokenizer->_break_itr);
-    return type == UBRK_DONE ? kCFStringTokenizerTokenNone : kCFStringTokenizerTokenNormal;
+    for (;;) {
+        int32_t start = ubrk_current(tokenizer->_break_itr);
+        int32_t end = ubrk_next(tokenizer->_break_itr);
+        if (end == UBRK_DONE) {
+            return __CFStringTokenizerInvalidateToken(tokenizer);
+        }
+
+        CFStringTokenizerTokenType type = __CFStringTokenizerSegmentType(tokenizer, ubrk_getRuleStatus(tokenizer->_break_itr), start, end);
+        if (type != kCFStringTokenizerTokenNone) {
+            tokenizer->_token = CFRangeMake(start, end - start);
+            return type;
+        }
+    }
 }
 
 CFRange CFStringTokenizerGetCurrentTokenRange(CFStringTokenizerRef tokenizer) {
-    int32_t prev = ubrk_previous(tokenizer->_break_itr);
-    int32_t curr = ubrk_next(tokenizer->_break_itr);
-    if (curr == UBRK_DONE) {
-        return CFRangeMake(0, -1);
-    } else {
-        return CFRangeMake(prev, curr - prev);
-    }
+    return tokenizer->_token;
 }
 
 CFTypeRef CFStringTokenizerCopyCurrentTokenAttribute(CFStringTokenizerRef tokenizer, CFOptionFlags attribute) {

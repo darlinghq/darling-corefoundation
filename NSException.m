@@ -22,14 +22,30 @@
 typedef id (*objc_exception_preprocessor)(id exception);
 extern objc_exception_preprocessor objc_setExceptionPreprocessor(objc_exception_preprocessor fn);
 
-static NSException *__exceptionPreprocess(NSException *exception)
+// The preprocessor sees every object passed to objc_exception_throw: any object, including root
+// classes that do not implement isKindOfClass: (they must still handle retain and release). nil is
+// not an NSException either.
+// Mirrors objectIsKindOfNSException in FoundationExceptions.m (i386 only, static) and
+// objectIsNSException in darling-foundation src/NSException.m; not shared because neither is
+// exported as SPI and the i386 file is left untouched.
+static BOOL __exceptionIsNSException(id exception)
+{
+    if (!class_respondsToSelector(object_getClass(exception), @selector(isKindOfClass:))) {
+        return NO;
+    }
+    return [exception isKindOfClass: [NSException class]];
+}
+
+static id __exceptionPreprocess(id exception)
 {
     // this is quite expensive (1/3 sec lag), when it can be made more performant (under 1/60 sec) this should be re-enabled
     // UPDATE(facekapow): i've re-enabled this even though nothing has really changed in the code, but from limited testing
     //                    it seems that this is pretty performant. besides, exceptions are just that: *exceptions*.
     //                    you shouldn't be constantly throwing around exceptions.
 #if 1
-    [exception _installStackTraceKeyIfNeeded];
+    if (__exceptionIsNSException(exception)) {
+        [(NSException *) exception _installStackTraceKeyIfNeeded];
+    }
 #endif
     return exception;
 }
