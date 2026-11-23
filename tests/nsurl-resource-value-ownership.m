@@ -5,6 +5,10 @@
 // CFURLCopyResourcePropertyForKey follows the Copy rule (the caller owns the value and releases it).
 // A temporary value is used because only the URL's resource cache references it, so a value that is
 // handed out without its own reference dies with the URL.
+// Checked on macOS 10.14.4 and 26.7.3 (both pass): the value is alive after the URL is released, and a caller's release
+// leaves the cached value alone. A NULL out pointer for CFURLCopyResourcePropertyForKey is not allowed on macOS (it
+// crashes there), so the test does not pass one; the retain count of a date is not pinned either (it is 1 for the
+// caller's reference on macOS 10.14.4).
 #import <Foundation/Foundation.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <stdio.h>
@@ -66,8 +70,6 @@ int main(void)
     CFTypeRef cfValue = NULL;
     ok = CFURLCopyResourcePropertyForKey((CFURLRef)url, kCFURLContentModificationDateKey, &cfValue, NULL);
     expect(ok && cfValue != NULL, @"CFURLCopyResourcePropertyForKey returns a date");
-    CFIndex firstCount = cfValue ? CFGetRetainCount(cfValue) : 0;
-    expect(firstCount >= 2, @"the value is owned by the caller and by the URL's cache");
     if (cfValue)
         CFRelease(cfValue);
 
@@ -76,19 +78,20 @@ int main(void)
     expect(ok && second != NULL && CFGetTypeID(second) == CFDateGetTypeID(), @"a second read after the caller's release still returns a live date");
     if (second)
         CFRelease(second);
-    ok = CFURLCopyResourcePropertyForKey((CFURLRef)url, kCFURLContentModificationDateKey, NULL, NULL);
-    expect(ok, @"a NULL out pointer is accepted");
 
-    // With a NULL out pointer nobody receives the value, so no reference may be left behind:
-    // the tracked value dies with the URL.
+    // The caller's release of a tracked value leaves the URL's reference: it dies with the URL, not before.
     int before = trackerDeallocs;
-    Tracker *unread = [[Tracker alloc] init];
-    [url setTemporaryResourceValue: unread forKey: key];
-    [unread release];
-    ok = CFURLCopyResourcePropertyForKey((CFURLRef)url, (CFStringRef)key, NULL, NULL);
-    expect(ok, @"a tracked value is read with a NULL out pointer");
+    Tracker *held = [[Tracker alloc] init];
+    [url setTemporaryResourceValue: held forKey: key];
+    [held release];
+    CFTypeRef trackedValue = NULL;
+    ok = CFURLCopyResourcePropertyForKey((CFURLRef)url, (CFStringRef)key, &trackedValue, NULL);
+    expect(ok && trackedValue != NULL, @"a tracked value is read");
+    if (trackedValue)
+        CFRelease(trackedValue);
+    expect(trackerDeallocs == before, @"the caller's release does not free the value the URL holds");
     [url release];
-    expect(trackerDeallocs == before + 1, @"a read with a NULL out pointer does not leak a reference");
+    expect(trackerDeallocs == before + 1, @"the value dies with the URL, with no reference left behind");
 
     unlink([path fileSystemRepresentation]);
     rmdir(dir);
