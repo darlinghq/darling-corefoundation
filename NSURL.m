@@ -1197,7 +1197,8 @@ Boolean CFURLCopyResourcePropertyForKey(CFURLRef url, CFStringRef key, void *pro
         CFURLResourceInfoUpdateRelease(resourceInfo, key, value);
     }
 
-    if (value != NULL)
+    // The caller owns the value (the Copy rule). The URL's resource cache holds its own reference.
+    if (value != NULL && propertyValueTypeRefPtr == NULL)
     {
         CFRelease(value);
     }
@@ -1889,8 +1890,10 @@ CFDataRef CFURLCreateBookmarkData(CFAllocatorRef allocator, CFURLRef url, CFURLB
                             CFRelease(storable);
                         }
                     }
-                    // CFURLCopyResourcePropertyForKey hands out a value that the URL's own cache keeps alive and
-                    // that the caller does not own, so it is not released here (releasing it freed the cached value).
+                    if (value != NULL)
+                    {
+                        CFRelease(value);
+                    }
                 }
                 CFDictionarySetValue(record, CFURLBookmarkResourceValuesKey, values);
                 CFRelease(values);
@@ -2195,7 +2198,14 @@ static void CFURLReturnError(CFErrorRef cfError, NSError **error)
 
 - (BOOL)getResourceValue:(out id *)value forKey:(NSString *)key error:(out NSError **)error
 {
-    return CFURLCopyResourcePropertyForKey([self _cfurl], (CFStringRef)key, value, (CFErrorRef *)error);
+    BOOL ok = CFURLCopyResourcePropertyForKey([self _cfurl], (CFStringRef)key, value, (CFErrorRef *)error);
+
+    // The out value is autoreleased, so it stays valid after the URL is released.
+    if (value != NULL && *value != nil)
+    {
+        CFAutorelease((CFTypeRef)*value);
+    }
+    return ok;
 }
 
 - (NSDictionary *)resourceValuesForKeys:(NSArray *)keys error:(NSError **)error
