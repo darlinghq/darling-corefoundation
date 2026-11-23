@@ -443,8 +443,18 @@ typedef struct {
         }
     }
     [self setLeapMonth:[coder decodeBoolForKey:@"NS.leapMonth"]];
-    [self setCalendar:[coder decodeObjectOfClass:[NSCalendar class] forKey:@"NS.calendar"]];
-    [self setTimeZone:[coder decodeObjectOfClass:[NSTimeZone class] forKey:@"NS.timezone"]];
+    NSCalendar *calendar = [coder decodeObjectOfClass:[NSCalendar class] forKey:@"NS.calendar"];
+    NSTimeZone *timeZone = [coder decodeObjectOfClass:[NSTimeZone class] forKey:@"NS.timezone"];
+    // An archive can store a property-list value (string, number, data) under these keys, and such
+    // values are not checked against the classes passed to -decodeObjectOfClass:forKey:.
+    if ((calendar != nil && ![calendar isKindOfClass:[NSCalendar class]]) ||
+        (timeZone != nil && ![timeZone isKindOfClass:[NSTimeZone class]]))
+    {
+        [self release];
+        return nil;
+    }
+    [self setCalendar:calendar];
+    [self setTimeZone:timeZone];
     return self;
 }
 

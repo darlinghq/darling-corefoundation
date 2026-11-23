@@ -90,6 +90,13 @@ const NSCalendarIdentifier NSCalendarIdentifierRepublicOfChina = @"roc";
     return NO;
 }
 
+// Restated because this class has its own -initWithCoder:; a secure unarchiver refuses a
+// class whose decoding initializer comes from below its +supportsSecureCoding.
++ (BOOL)supportsSecureCoding
+{
+    return YES;
+}
+
 #define MAX_COMPS 17
 
 static int makeCFCalendarComponentVector(NSDateComponents *comps, int *componentVector, char *format)
