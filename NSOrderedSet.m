@@ -558,7 +558,8 @@
         idx++;
     };
 
-    [self initWithObjects:objects count:idx];
+    // the placeholder this is sent to hands back the real ordered set
+    self = [self initWithObjects:objects count:idx];
 
     free(objects);
 
