@@ -117,14 +117,16 @@ static NSError *_outOfmemoryError = nil;
     return [desc autorelease];
 }
 
+// The failure reason and the recovery suggestion come from the userInfo, or else from the callback registered
+// for the error domain (see CFErrorSetCallBackForDomain), as the description does.
 - (NSString *)localizedFailureReason
 {
-    return [self userInfo][NSLocalizedFailureReasonErrorKey];
+    return [(NSString *)_CFErrorCreateLocalizedFailureReason((CFErrorRef)self) autorelease];
 }
 
 - (NSString *)localizedRecoverySuggestion
 {
-    return [self userInfo][NSLocalizedRecoverySuggestionErrorKey];
+    return [(NSString *)_CFErrorCreateLocalizedRecoverySuggestion((CFErrorRef)self) autorelease];
 }
 
 - (NSArray *)localizedRecoveryOptions

@@ -219,6 +219,16 @@ static CFStringRef _CFErrorCopyUserInfoKey(CFErrorRef err, CFStringRef key) {
     return result;
 }
 
+/* The name an error domain is shown under in the generic "operation couldn\u2019t be completed" text when Error.strings has no entry for it. Only the domains whose names were observed on the original are listed; others are shown by their domain string.
+*/
+static CFStringRef _CFErrorBuiltinDomainDisplayName(CFStringRef domain) {
+    if (CFEqual(domain, kCFErrorDomainCocoa)) return CFSTR("Cocoa");
+    if (CFEqual(domain, kCFErrorDomainPOSIX)) return CFSTR("POSIX");
+    if (CFEqual(domain, kCFErrorDomainOSStatus)) return CFSTR("OSStatus");
+    if (CFEqual(domain, kCFErrorDomainMach)) return CFSTR("Mach");
+    return NULL;
+}
+
 /* The real guts of the description creation functionality. See the header file for the steps this function goes through to compute the description. This function can take a CF or NSError. It's called by NSError for the localizedDescription computation.
 */
 CFStringRef _CFErrorCreateLocalizedDescription(CFErrorRef err) {
@@ -239,9 +249,9 @@ CFStringRef _CFErrorCreateLocalizedDescription(CFErrorRef err) {
 	if ((reasonOrDesc = _CFErrorCopyUserInfoKey(err, kCFErrorLocalizedFailureReasonKey))) {	    // First look for kCFErrorLocalizedFailureReasonKey
 	    result = CFStringCreateWithFormat(kCFAllocatorSystemDefault, NULL, CFSTR("The operation couldn\u2019t be completed. %@"), reasonOrDesc);
 	} else if ((reasonOrDesc = _CFErrorCopyUserInfoKey(err, kCFErrorDescriptionKey))) {	    // Then try kCFErrorDescriptionKey
-	    result = CFStringCreateWithFormat(kCFAllocatorSystemDefault, NULL, CFSTR("The operation couldn\u2019t be completed. (%@ error %ld - %@)"), CFErrorGetDomain(err), (long)CFErrorGetCode(err), reasonOrDesc);
+	    result = CFStringCreateWithFormat(kCFAllocatorSystemDefault, NULL, CFSTR("The operation couldn\u2019t be completed. (%@ error %ld - %@)"), _CFErrorBuiltinDomainDisplayName(CFErrorGetDomain(err)) ?: CFErrorGetDomain(err), (long)CFErrorGetCode(err), reasonOrDesc);
 	} else {	// Last resort, just the domain and code
-	    result = CFStringCreateWithFormat(kCFAllocatorSystemDefault, NULL, CFSTR("The operation couldn\u2019t be completed. (%@ error %ld.)"), CFErrorGetDomain(err), (long)CFErrorGetCode(err));
+	    result = CFStringCreateWithFormat(kCFAllocatorSystemDefault, NULL, CFSTR("The operation couldn\u2019t be completed. (%@ error %ld.)"), _CFErrorBuiltinDomainDisplayName(CFErrorGetDomain(err)) ?: CFErrorGetDomain(err), (long)CFErrorGetCode(err));
 	}
 	if (reasonOrDesc) CFRelease(reasonOrDesc);
 	return result;
@@ -264,6 +274,11 @@ CFStringRef _CFErrorCreateLocalizedDescription(CFErrorRef err) {
     CFStringRef result;
     CFStringRef desc = _CFErrorCopyUserInfoKey(err, kCFErrorDescriptionKey);
     CFStringRef localizedDomain = CFCopyLocalizedStringFromTableInBundle(CFErrorGetDomain(err), CFSTR("Error"), cfBundle, "These are localized in the comment above");
+    CFStringRef builtinDomain = _CFErrorBuiltinDomainDisplayName(CFErrorGetDomain(err));
+    if (builtinDomain && CFEqual(localizedDomain, CFErrorGetDomain(err))) {	// no entry in Error.strings
+        CFRelease(localizedDomain);
+        localizedDomain = (CFStringRef)CFRetain(builtinDomain);
+    }
     if (desc) {     // We have kCFErrorDescriptionKey, so include that with the error domain and code
 	CFStringRef operationFailedStr = CFCopyLocalizedStringFromTableInBundle(CFSTR("The operation couldn\u2019t be completed. (%@ error %ld - %@)"), CFSTR("Error"), cfBundle, "A generic error string indicating there was a problem, followed by a parenthetical sentence which indicates error domain, code, and a description when there is no other way to present an error to the user. The first %@ indicates the error domain, %ld indicates the error code, and the second %@ indicates the description; so this might become '(Mach error 42 - Server error.)' for instance.");
 	result = CFStringCreateWithFormat(kCFAllocatorSystemDefault, NULL, operationFailedStr, localizedDomain, (long)CFErrorGetCode(err), desc);
@@ -425,6 +440,12 @@ static CFTypeRef _CFErrorPOSIXCallBack(CFErrorRef err, CFStringRef key) {
     
     if (!errStr) return NULL;
     if (CFEqual(key, kCFErrorDescriptionKey)) return errStr;	// If all we wanted was the non-localized description, we're done
+
+    // A code the C library has no message for gets "Unknown error: N" as the description, but no failure reason.
+    if (CFErrorGetCode(err) < 0 || CFErrorGetCode(err) > ELAST) {
+        CFRelease(errStr);
+        return NULL;
+    }
     
 #if DEPLOYMENT_TARGET_MACOSX || DEPLOYMENT_TARGET_EMBEDDED || DEPLOYMENT_TARGET_WINDOWS
     // We need a kCFErrorLocalizedFailureReasonKey, so look up a possible localization for the error message
@@ -440,16 +461,10 @@ static CFTypeRef _CFErrorPOSIXCallBack(CFErrorRef err, CFStringRef key) {
                 if (url) {
                     CFBundleRef bundle = CFBundleCreate(kCFAllocatorSystemDefault, url);
                     if (bundle) {
-                        // We only want to return a result if there was a localization
+                        // Without a localization the failure reason is the C library\u2019s English message
                         CFStringRef localizedErrStr = CFBundleCopyLocalizedString(bundle, errStr, errStr, CFSTR("ErrnoErrors"));
-                        if (localizedErrStr == errStr) {
-                            CFRelease(localizedErrStr);
-                            CFRelease(errStr);
-                            errStr = NULL;
-                        } else {
-                            CFRelease(errStr);
-                            errStr = localizedErrStr;
-                        }
+                        CFRelease(errStr);
+                        errStr = localizedErrStr;
                         CFRelease(bundle);
                     }
                     CFRelease(url);
