@@ -12,6 +12,9 @@
 #include <dirent.h>
 #include <errno.h>
 #include <sys/syslimits.h>
+#include <sys/mount.h>
+#include <stdlib.h>
+#include <string.h>
 
 static CFIndex CFURLEnumeratorPushURL(CFURLEnumeratorRef enumerator, CFURLRef url, CFErrorRef *error);
 static CFIndex CFURLEnumeratorPopURL(CFURLEnumeratorRef enumerator);
@@ -30,6 +33,9 @@ struct __CFURLEnumerator {
     // The URL last returned. It follows the Get rule: the enumerator keeps it
     // until the next call or until the enumerator goes away.
     CFURLRef lastURL;
+    // An enumerator of the mounted volumes goes through these, not through the directory URL.
+    CFArrayRef volumeURLs;
+    CFIndex volumeIndex;
 };
 
 CFComparisonResult _compareFileInfo(const void *fileInfo1, const void *fileInfo2, void *context) {
@@ -40,7 +46,13 @@ CFComparisonResult _compareFileInfo(const void *fileInfo1, const void *fileInfo2
 
 static void __CFURLEnumeratorDeallocate(CFTypeRef cf) {
     struct __CFURLEnumerator *enumerator = (struct __CFURLEnumerator *)cf;
-    CFRelease(enumerator->directoryURL);
+    if (enumerator->directoryURL != NULL) {
+        CFRelease(enumerator->directoryURL);
+    }
+
+    if (enumerator->volumeURLs != NULL) {
+        CFRelease(enumerator->volumeURLs);
+    }
 
     if (enumerator->propertyKeys != NULL) {
         CFRelease(enumerator->propertyKeys);
@@ -256,6 +268,66 @@ CFURLEnumeratorRef CFURLEnumeratorCreateForDirectoryURL(CFAllocatorRef alloc, CF
     return (CFURLEnumeratorRef)enumerator;
 }
 
+// The volumes are the mount points of the mount table, in its order, without the device file system (which macOS
+// leaves out too). Volumes the system marks as not to be browsed are the invisible ones.
+CFURLEnumeratorRef CFURLEnumeratorCreateForMountedVolumes(CFAllocatorRef alloc, CFURLEnumeratorOptions option, CFArrayRef propertyKeys) {
+    int count = getfsstat(NULL, 0, MNT_NOWAIT);
+    struct statfs *mounts = NULL;
+    if (count > 0) {
+        mounts = malloc(sizeof(struct statfs) * (size_t)count);
+        if (mounts == NULL) {
+            return NULL;
+        }
+        count = getfsstat(mounts, (int)(sizeof(struct statfs) * (size_t)count), MNT_NOWAIT);
+    }
+    if (count < 0) {
+        count = 0;
+    }
+
+    CFMutableArrayRef urls = CFArrayCreateMutable(alloc, 0, &kCFTypeArrayCallBacks);
+    for (int i = 0; i < count; i++) {
+        if (strcmp(mounts[i].f_fstypename, "devfs") == 0) {
+            continue;
+        }
+        if ((option & kCFURLEnumeratorSkipInvisibles) != 0 && (mounts[i].f_flags & MNT_DONTBROWSE) != 0) {
+            continue;
+        }
+        CFURLRef url = CFURLCreateFromFileSystemRepresentation(alloc, (const UInt8 *)mounts[i].f_mntonname, (CFIndex)strlen(mounts[i].f_mntonname), true);
+        if (url != NULL) {
+            CFArrayAppendValue(urls, url);
+            CFRelease(url);
+        }
+    }
+    free(mounts);
+
+    struct __CFURLEnumerator *enumerator = _CFURLEnumeratorCreate(alloc);
+    enumerator->options = option;
+    if (propertyKeys != NULL) {
+        enumerator->propertyKeys = CFArrayCreateCopy(alloc, propertyKeys);
+    }
+    enumerator->volumeURLs = urls;
+    return (CFURLEnumeratorRef)enumerator;
+}
+
+static CFURLEnumeratorResult CFURLEnumeratorGetNextVolumeURL(struct __CFURLEnumerator *enumerator, CFURLRef *url, CFErrorRef *error) {
+    if (enumerator->volumeIndex >= CFArrayGetCount(enumerator->volumeURLs)) {
+        return kCFURLEnumeratorEnd;
+    }
+    CFURLRef item = (CFURLRef)CFRetain(CFArrayGetValueAtIndex(enumerator->volumeURLs, enumerator->volumeIndex++));
+    enumerator->lastURL = item;
+    if (url != NULL) {
+        *url = item;
+    }
+    if (enumerator->propertyKeys != NULL) {
+        CFDictionaryRef properties = CFURLCopyResourcePropertiesForKeys(item, enumerator->propertyKeys, error);
+        if (properties == NULL) {
+            return kCFURLEnumeratorError;
+        }
+        CFRelease(properties);
+    }
+    return kCFURLEnumeratorSuccess;
+}
+
 CFURLEnumeratorResult CFURLEnumeratorGetNextURL(CFURLEnumeratorRef enumer, CFURLRef *url, CFErrorRef *error) {
     struct __CFURLEnumerator *enumerator = (struct __CFURLEnumerator *)enumer;
     
@@ -270,6 +342,10 @@ CFURLEnumeratorResult CFURLEnumeratorGetNextURL(CFURLEnumeratorRef enumer, CFURL
     if (enumerator->lastURL != NULL) {
         CFRelease(enumerator->lastURL);
         enumerator->lastURL = NULL;
+    }
+
+    if (enumerator->volumeURLs != NULL) {
+        return CFURLEnumeratorGetNextVolumeURL(enumerator, url, error);
     }
 
     CFIndex count = 0;
@@ -351,8 +427,7 @@ CFIndex CFURLEnumeratorGetDescendentLevel(CFURLEnumeratorRef enumerator) {
     return CFArrayGetCount(enumerator->urlStack) + 1;
 }
 
-/*
+// Nothing here notices a change of the source while enumerating; macOS answers false until one is seen.
 Boolean CFURLEnumeratorGetSourceDidChange(CFURLEnumeratorRef enumerator) {
     return false;
 }
-*/
