@@ -20,6 +20,8 @@
 #import <Foundation/NSValue.h>
 #import "ForFoundationOnly.h"
 #import "NSObjectInternal.h"
+#import "CFInternal.h"
+#include <pthread.h>
 
 CF_PRIVATE
 @interface __NSCFError : __NSCFType
@@ -42,6 +44,41 @@ CF_PRIVATE NSString *const NSHelpAnchorErrorKey = @"NSHelpAnchor";
 
 static NSError *_outOfmemoryError = nil;
 
+// The user info value providers, by domain.
+static NSMutableDictionary *_valueProviders = nil;
+static pthread_mutex_t _valueProvidersLock = PTHREAD_MUTEX_INITIALIZER;
+
+static id (^copyValueProvider(NSString *domain))(NSError *, NSString *)
+{
+    pthread_mutex_lock(&_valueProvidersLock);
+    id (^provider)(NSError *, NSString *) = [[_valueProviders objectForKey:domain] retain];
+    pthread_mutex_unlock(&_valueProvidersLock);
+    return provider;
+}
+
+CF_PRIVATE CFTypeRef _CFErrorCopyValueFromProvider(CFErrorRef err, CFStringRef key)
+{
+    id (^provider)(NSError *, NSString *) = copyValueProvider((NSString *)CFErrorGetDomain(err));
+    if (provider == nil)
+    {
+        return NULL;
+    }
+    id value = [provider((NSError *)err, (NSString *)key) retain];
+    [provider release];
+    return (CFTypeRef)value;
+}
+
+// The user info's value for the key, or else the domain's value provider's.
+static id userInfoValue(NSError *error, NSString *key)
+{
+    id value = [[error userInfo] objectForKey:key];
+    if (value == nil)
+    {
+        value = [(id)_CFErrorCopyValueFromProvider((CFErrorRef)error, (CFStringRef)key) autorelease];
+    }
+    return value;
+}
+
 @implementation NSError
 
 + (void)initialize
@@ -62,12 +99,12 @@ static NSError *_outOfmemoryError = nil;
     return CFErrorGetTypeID();
 }
 
-+ (id)errorWithDomain:(NSString *)domain code:(NSInteger)code userInfo:(NSDictionary *)dict
++ (instancetype)errorWithDomain:(NSString *)domain code:(NSInteger)code userInfo:(NSDictionary *)dict
 {
     return [[[self alloc] initWithDomain:domain code:code userInfo:dict] autorelease];
 }
 
-- (id)initWithDomain:(NSString *)domain code:(NSInteger)code userInfo:(NSDictionary *)dict
+- (instancetype)initWithDomain:(NSString *)domain code:(NSInteger)code userInfo:(NSDictionary *)dict
 {
     self = [super init];
 
@@ -101,12 +138,38 @@ static NSError *_outOfmemoryError = nil;
     return [(NSString *)_CFErrorCreateDebugDescription((CFErrorRef)self) autorelease];
 }
 
++ (void)setUserInfoValueProviderForDomain:(NSString *)domain provider:(id (^)(NSError *, NSString *))provider
+{
+    pthread_mutex_lock(&_valueProvidersLock);
+    if (provider != nil)
+    {
+        if (_valueProviders == nil)
+        {
+            _valueProviders = [[NSMutableDictionary alloc] init];
+        }
+        id copied = [provider copy];
+        [_valueProviders setObject:copied forKey:domain];
+        [copied release];
+    }
+    else
+    {
+        [_valueProviders removeObjectForKey:domain];
+    }
+    pthread_mutex_unlock(&_valueProvidersLock);
+}
+
++ (id (^)(NSError *, NSString *))userInfoValueProviderForDomain:(NSString *)domain
+{
+    return [copyValueProvider(domain) autorelease];
+}
+
 - (NSString *)localizedDescription
 {
     NSString *desc = [[self userInfo][NSLocalizedDescriptionKey] copy];
 
     if (desc == nil)
     {
+        // Asks the value provider for the description and the failure reason.
         desc = (NSString *)_CFErrorCreateLocalizedDescription((CFErrorRef)self);
         if (desc == nil)
         {
@@ -119,27 +182,27 @@ static NSError *_outOfmemoryError = nil;
 
 - (NSString *)localizedFailureReason
 {
-    return [self userInfo][NSLocalizedFailureReasonErrorKey];
+    return userInfoValue(self, NSLocalizedFailureReasonErrorKey);
 }
 
 - (NSString *)localizedRecoverySuggestion
 {
-    return [self userInfo][NSLocalizedRecoverySuggestionErrorKey];
+    return userInfoValue(self, NSLocalizedRecoverySuggestionErrorKey);
 }
 
 - (NSArray *)localizedRecoveryOptions
 {
-    return [self userInfo][NSLocalizedRecoveryOptionsErrorKey];
+    return userInfoValue(self, NSLocalizedRecoveryOptionsErrorKey);
 }
 
 - (id)recoveryAttempter
 {
-    return [self userInfo][NSRecoveryAttempterErrorKey];
+    return userInfoValue(self, NSRecoveryAttempterErrorKey);
 }
 
 - (NSString *)helpAnchor
 {
-    return [self userInfo][NSHelpAnchorErrorKey];
+    return userInfoValue(self, NSHelpAnchorErrorKey);
 }
 
 - (id)copyWithZone:(NSZone *)zone
