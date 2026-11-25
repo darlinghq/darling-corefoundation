@@ -1001,32 +1001,38 @@ static bool __CFLocaleCopyCalendarID(CFLocaleRef locale, bool user, CFTypeRef *c
     return true;
 }
 
+// The user's first day of the week and minimum days in the first week (dictionaries from the
+// calendar's identifier to a number) for a calendar of the locale.
+CF_PRIVATE void __CFLocaleApplyCalendarPrefs(CFLocaleRef locale, CFStringRef calendarID, CFCalendarRef calendar) {
+    CFDictionaryRef prefs = __CFLocaleGetPrefs(locale);
+    CFPropertyListRef metapref = prefs ? CFDictionaryGetValue(prefs, CFSTR("AppleFirstWeekday")) : NULL;
+    if (NULL != metapref && CFGetTypeID(metapref) == CFDictionaryGetTypeID()) {
+        metapref = (CFNumberRef)CFDictionaryGetValue((CFDictionaryRef)metapref, calendarID);
+    }
+    if (NULL != metapref && CFGetTypeID(metapref) == CFNumberGetTypeID()) {
+        CFIndex wkdy;
+        if (CFNumberGetValue((CFNumberRef)metapref, kCFNumberCFIndexType, &wkdy)) {
+            CFCalendarSetFirstWeekday(calendar, wkdy);
+        }
+    }
+    metapref = prefs ? CFDictionaryGetValue(prefs, CFSTR("AppleMinDaysInFirstWeek")) : NULL;
+    if (NULL != metapref && CFGetTypeID(metapref) == CFDictionaryGetTypeID()) {
+        metapref = (CFNumberRef)CFDictionaryGetValue((CFDictionaryRef)metapref, calendarID);
+    }
+    if (NULL != metapref && CFGetTypeID(metapref) == CFNumberGetTypeID()) {
+        CFIndex mwd;
+        if (CFNumberGetValue((CFNumberRef)metapref, kCFNumberCFIndexType, &mwd)) {
+            CFCalendarSetMinimumDaysInFirstWeek(calendar, mwd);
+        }
+    }
+}
+
 static bool __CFLocaleCopyCalendar(CFLocaleRef locale, bool user, CFTypeRef *cf, CFStringRef context) {
 #if DEPLOYMENT_TARGET_MACOSX || DEPLOYMENT_TARGET_EMBEDDED || DEPLOYMENT_TARGET_WINDOWS || DEPLOYMENT_TARGET_LINUX
     if (__CFLocaleCopyCalendarID(locale, user, cf, context)) {
 	CFCalendarRef calendar = CFCalendarCreateWithIdentifier(kCFAllocatorSystemDefault, (CFStringRef)*cf);
 	CFCalendarSetLocale(calendar, locale);
-        CFDictionaryRef prefs = __CFLocaleGetPrefs(locale);
-        CFPropertyListRef metapref = prefs ? CFDictionaryGetValue(prefs, CFSTR("AppleFirstWeekday")) : NULL;
-        if (NULL != metapref && CFGetTypeID(metapref) == CFDictionaryGetTypeID()) {
-            metapref = (CFNumberRef)CFDictionaryGetValue((CFDictionaryRef)metapref, *cf);
-        }
-        if (NULL != metapref && CFGetTypeID(metapref) == CFNumberGetTypeID()) {
-            CFIndex wkdy;
-            if (CFNumberGetValue((CFNumberRef)metapref, kCFNumberCFIndexType, &wkdy)) {
-                CFCalendarSetFirstWeekday(calendar, wkdy);
-            }
-        }
-        metapref = prefs ? CFDictionaryGetValue(prefs, CFSTR("AppleMinDaysInFirstWeek")) : NULL;
-        if (NULL != metapref && CFGetTypeID(metapref) == CFDictionaryGetTypeID()) {
-            metapref = (CFNumberRef)CFDictionaryGetValue((CFDictionaryRef)metapref, *cf);
-        }
-        if (NULL != metapref && CFGetTypeID(metapref) == CFNumberGetTypeID()) {
-            CFIndex mwd;
-            if (CFNumberGetValue((CFNumberRef)metapref, kCFNumberCFIndexType, &mwd)) {
-                CFCalendarSetMinimumDaysInFirstWeek(calendar, mwd);
-            }
-        }
+        __CFLocaleApplyCalendarPrefs(locale, (CFStringRef)*cf, calendar);
 	CFRelease(*cf);
 	*cf = calendar;
 	return true;
