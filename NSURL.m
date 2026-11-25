@@ -21,6 +21,9 @@
 #include <sys/statvfs.h>
 #include <sys/stat.h>
 #include <sys/xattr.h>
+#include <sys/attr.h>
+#include <sys/mount.h>
+#include <uuid/uuid.h>
 #include <dlfcn.h>
 #include <limits.h>
 #include <stdio.h>
@@ -294,6 +297,7 @@ static CFErrorRef UTLoadError;
 static CFStringRef (*UTCreatePreferredIdentifierForTag)(CFStringRef, CFStringRef, CFStringRef);
 static Boolean (*UTConformsTo)(CFStringRef, CFStringRef);
 static CFStringRef *UTTagClassFilenameExtension;
+static OSStatus (*LSCopyKind)(CFURLRef, CFStringRef *);
 
 static void CFURLLoadLaunchServices(void *context)
 {
@@ -306,6 +310,7 @@ static void CFURLLoadLaunchServices(void *context)
     UTCreatePreferredIdentifierForTag = dlsym(UTLaunchServicesHandle, "UTTypeCreatePreferredIdentifierForTag");
     UTConformsTo = dlsym(UTLaunchServicesHandle, "UTTypeConformsTo");
     UTTagClassFilenameExtension = dlsym(UTLaunchServicesHandle, "kUTTagClassFilenameExtension");
+    LSCopyKind = dlsym(UTLaunchServicesHandle, "LSCopyKindStringForURL");
     if (UTCreatePreferredIdentifierForTag == NULL || UTConformsTo == NULL || UTTagClassFilenameExtension == NULL)
         dlError(&UTLoadError);
 }
@@ -316,8 +321,44 @@ static void CFURLEnsureLaunchServices(void)
     dispatch_once_f(&once, NULL, CFURLLoadLaunchServices);
 }
 
-// Links, folders, directory types that are declared (.app) and files; a path with no extension
-// is public.data (public.unix-executable when executable).
+// The item's kind ("Folder", "Application", ...) is what LaunchServices names it.
+// Test: tests/URLLocalizedTypeDescription.m
+static CFStringRef CFURLCreateLocalizedTypeDescription(CFURLRef url, CFErrorRef *error)
+{
+    struct stat info;
+    if (!CFURLStat(url, &info))
+    {
+        resourceReadError(error);
+        return NULL;
+    }
+
+    CFURLEnsureLaunchServices();
+    CFStringRef kind = NULL;
+    if (LSCopyKind == NULL)
+    {
+        if (error != NULL && UTLoadError != NULL)
+            *error = (CFErrorRef)CFRetain(UTLoadError);
+        return NULL;
+    }
+    if (LSCopyKind(url, &kind) != 0)
+        kind = NULL;
+    return kind;
+}
+
+// Whether the URL's path, with symbolic links resolved, is the mount point of the volume it is on.
+static Boolean CFURLIsMountRoot(CFURLRef url)
+{
+    UInt8 path[PATH_MAX] = { 0 };
+    char resolved[PATH_MAX];
+    struct statfs st;
+    return CFURLGetFileSystemRepresentation(url, true, path, PATH_MAX)
+        && realpath((const char *)path, resolved) != NULL && statfs(resolved, &st) == 0
+        && strcmp(resolved, st.f_mntonname) == 0;
+}
+
+// Links, volumes (a mount point is public.volume, whatever its name), folders, directory types that
+// are declared (.app) and files; a path with no extension is public.data (public.unix-executable
+// when executable).
 static CFStringRef CFURLCreateTypeIdentifier(CFURLRef url, CFErrorRef *error)
 {
     CFURLEnsureLaunchServices();
@@ -342,7 +383,11 @@ static CFStringRef CFURLCreateTypeIdentifier(CFURLRef url, CFErrorRef *error)
     Boolean hasExtension = extension != NULL && CFStringGetLength(extension) > 0;
     CFStringRef result = NULL;
 
-    if (S_ISDIR(info.st_mode))
+    if (S_ISDIR(info.st_mode) && CFURLIsMountRoot(url))
+    {
+        result = CFRetain(CFSTR("public.volume"));
+    }
+    else if (S_ISDIR(info.st_mode))
     {
         if (hasExtension)
         {
@@ -402,12 +447,14 @@ static CFTypeRef CFURLCreateContentType(CFURLRef url, CFErrorRef *error)
 }
 
 // The Finder flags live in bytes 8 and 9 (big endian) of the 32-byte "com.apple.FinderInfo"
-// extended attribute; kExtensionIsHidden is the 0x0010 bit of that word and kHasBundle the 0x2000 bit.
+// extended attribute; kExtensionIsHidden is the 0x0010 bit of that word, kHasBundle the 0x2000 bit and
+// kIsInvisible the 0x4000 bit.
 enum {
     kFinderInfoSize = 32,
     kFinderFlagsOffset = 8,
     kFinderExtensionIsHidden = 0x0010,
     kFinderHasBundle = 0x2000,
+    kFinderIsInvisible = 0x4000,
 };
 
 // Reads the FinderInfo of the item itself (a symbolic link is not followed). Returns false
@@ -480,8 +527,8 @@ static Boolean CFURLDirectoryIsPackage(CFURLRef url)
     return provider != NULL && provider(url);
 }
 
-// Sets or clears the extension-hidden flag, leaving the rest of the FinderInfo as it is.
-static Boolean CFURLSetExtensionIsHidden(CFURLRef url, Boolean hidden)
+// Sets or clears one of the Finder flags, leaving the rest of the FinderInfo as it is.
+static Boolean CFURLSetFinderFlag(CFURLRef url, UInt16 flag, Boolean hidden)
 {
     UInt8 info[kFinderInfoSize];
     UInt8 path[PATH_MAX] = { 0 };
@@ -492,7 +539,7 @@ static Boolean CFURLSetExtensionIsHidden(CFURLRef url, Boolean hidden)
     }
 
     UInt16 flags = (info[kFinderFlagsOffset] << 8) | info[kFinderFlagsOffset + 1];
-    UInt16 updated = hidden ? (flags | kFinderExtensionIsHidden) : (flags & ~kFinderExtensionIsHidden);
+    UInt16 updated = hidden ? (flags | flag) : (flags & ~flag);
     if (updated == flags && (hidden == false))
     {
         // Nothing to clear, and no attribute needs to be created for that.
@@ -506,14 +553,236 @@ static Boolean CFURLSetExtensionIsHidden(CFURLRef url, Boolean hidden)
     return setxattr((const char *)path, XATTR_FINDERINFO_NAME, info, kFinderInfoSize, 0, XATTR_NOFOLLOW) == 0;
 }
 
+static Boolean CFURLSetExtensionIsHidden(CFURLRef url, Boolean hidden)
+{
+    return CFURLSetFinderFlag(url, kFinderExtensionIsHidden, hidden);
+}
+
+// Whether the item is hidden: a name starting with ".", UF_HIDDEN in its flags, or the Finder's invisible flag
+// (as observed on macOS 10.14.4 and 26.7.3; tests/URLIsHidden.m)
+static Boolean CFURLIsHidden(CFURLRef url)
+{
+    Boolean hidden = false;
+    CFStringRef lastPathComp = CFURLCopyLastPathComponent(url);
+    if (lastPathComp != NULL)
+    {
+        hidden = CFStringGetLength(lastPathComp) > 0 && CFStringGetCharacterAtIndex(lastPathComp, 0) == '.';
+        CFRelease(lastPathComp);
+    }
+    if (hidden)
+    {
+        return true;
+    }
+
+    UInt8 path[PATH_MAX] = { 0 };
+    struct stat info;
+    if (CFURLGetFileSystemRepresentation(url, true, path, PATH_MAX) && lstat((const char *)path, &info) == 0
+        && (info.st_flags & UF_HIDDEN) != 0)
+    {
+        return true;
+    }
+
+    UInt8 finderInfo[kFinderInfoSize];
+    return CFURLReadFinderInfo(url, finderInfo)
+        && (((finderInfo[kFinderFlagsOffset] << 8) | finderInfo[kFinderFlagsOffset + 1]) & kFinderIsInvisible) != 0;
+}
+
+// Hides or shows the item as macOS does: the Finder's invisible flag and UF_HIDDEN. Succeeds if either could be
+// stored (file systems without file flags, such as Linux ones, keep only the FinderInfo); otherwise errno is set.
+static Boolean CFURLSetHidden(CFURLRef url, Boolean hidden)
+{
+    UInt8 path[PATH_MAX] = { 0 };
+    struct stat info;
+    if (!CFURLGetFileSystemRepresentation(url, true, path, PATH_MAX))
+    {
+        errno = EINVAL;
+        return false;
+    }
+    if (lstat((const char *)path, &info) != 0)
+    {
+        return false;
+    }
+
+    Boolean storedInfo = CFURLSetFinderFlag(url, kFinderIsInvisible, hidden);
+    int infoErrno = errno;
+    u_int flags = hidden ? (info.st_flags | UF_HIDDEN) : (info.st_flags & ~UF_HIDDEN);
+    Boolean storedFlags = flags == info.st_flags || lchflags((const char *)path, flags) == 0;
+    if (!storedInfo && !storedFlags)
+    {
+        errno = infoErrno;
+        return false;
+    }
+    return true;
+}
+
 static pthread_mutex_t resInfoLock = PTHREAD_MUTEX_INITIALIZER;
+
+// The volume a file URL's path is on: its statfs, and the name and UUID getattrlist gives for the mount point (an
+// empty name and a null UUID when it gives none). False for a non-file URL or a path that does not exist.
+static Boolean volumeInfoForURL(CFURLRef url, struct statfs *outStat, char *outName, size_t nameSize, uuid_t outUUID)
+{
+    UInt8 path[PATH_MAX] = { 0 };
+    struct attrlist request = { 0 };
+    struct
+    {
+        u_int32_t length;
+        attrreference_t name;
+        uuid_t uuid;
+        char names[NAME_MAX * 3 + 1];
+    } __attribute__((aligned(4), packed)) reply;
+
+    outName[0] = 0;
+    uuid_clear(outUUID);
+    if (!CFURLGetFileSystemRepresentation(url, true, path, PATH_MAX) || statfs((const char *)path, outStat) != 0)
+    {
+        return false;
+    }
+
+    request.bitmapcount = ATTR_BIT_MAP_COUNT;
+    request.volattr = ATTR_VOL_INFO | ATTR_VOL_NAME | ATTR_VOL_UUID;
+    if (getattrlist(outStat->f_mntonname, &request, &reply, sizeof(reply), 0) == 0)
+    {
+        const char *name = (const char *)&reply.name + reply.name.attr_dataoffset;
+        const char *end = (const char *)&reply + sizeof(reply);
+        if (reply.name.attr_length > 0 && name + reply.name.attr_length <= end)
+        {
+            strlcpy(outName, name, nameSize < reply.name.attr_length ? nameSize : reply.name.attr_length);
+        }
+        uuid_copy(outUUID, reply.uuid);
+    }
+    return true;
+}
+
+static Boolean isVolumeKey(CFStringRef key)
+{
+    static const CFStringRef *const keys[] = {
+        &kCFURLVolumeNameKey, &kCFURLVolumeLocalizedNameKey, &kCFURLVolumeUUIDStringKey,
+        &kCFURLVolumeIsRemovableKey, &kCFURLVolumeIsEjectableKey,
+        &kCFURLVolumeIsLocalKey, &kCFURLVolumeIsInternalKey, &kCFURLVolumeIsBrowsableKey,
+        &kCFURLVolumeIsAutomountedKey, &kCFURLVolumeLocalizedFormatDescriptionKey, &kCFURLVolumeURLKey,
+        &kCFURLVolumeIdentifierKey,
+    };
+    for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++)
+    {
+        if (CFEqual(key, *keys[i]))
+        {
+            return true;
+        }
+    }
+    return CFEqual(key, (CFStringRef)NSURLVolumeIsRootFileSystemKey) || CFEqual(key, (CFStringRef)NSURLVolumeTypeNameKey)
+        || CFEqual(key, (CFStringRef)NSURLVolumeSubtypeKey) || CFEqual(key, (CFStringRef)NSURLVolumeMountFromLocationKey);
+}
+
+static CFStringRef createVolumeFormatDescription(const struct statfs *st)
+{
+    if (strcmp(st->f_fstypename, "hfs") == 0)
+    {
+        return (st->f_flags & MNT_JOURNALED) ? CFSTR("Mac OS Extended (Journaled)") : CFSTR("Mac OS Extended");
+    }
+    if (strcmp(st->f_fstypename, "apfs") == 0)
+    {
+        return CFSTR("APFS");
+    }
+    return CFStringCreateWithCString(kCFAllocatorDefault, st->f_fstypename, kCFStringEncodingUTF8);
+}
+
+// The volume resource keys (isVolumeKey) for the volume that contains the URL's path. NULL for a URL that is not on
+// a volume, and for a key the volume has no value for.
+static CFTypeRef createVolumePropertyForKey(CFURLRef url, CFStringRef key)
+{
+    struct statfs st;
+    char name[NAME_MAX * 3 + 1];
+    uuid_t uuid;
+    Boolean removable, local;
+
+    if (!volumeInfoForURL(url, &st, name, sizeof(name), uuid))
+    {
+        return NULL;
+    }
+    removable = (st.f_flags & MNT_REMOVABLE) != 0;
+    local = (st.f_flags & MNT_LOCAL) != 0;
+
+    if (CFEqual(key, kCFURLVolumeNameKey) || CFEqual(key, kCFURLVolumeLocalizedNameKey))
+    {
+        return name[0] ? CFStringCreateWithCString(kCFAllocatorDefault, name, kCFStringEncodingUTF8) : NULL;
+    }
+    if (CFEqual(key, kCFURLVolumeUUIDStringKey))
+    {
+        uuid_string_t text;
+        if (uuid_is_null(uuid))
+        {
+            return NULL;
+        }
+        uuid_unparse_upper(uuid, text);
+        return CFStringCreateWithCString(kCFAllocatorDefault, text, kCFStringEncodingASCII);
+    }
+    // Ejectable is the same as removable: CoreFoundation does not ask DiskArbitration, and every removable volume
+    // Darling has is a disk image, which DiskArbitration reports as ejectable (as macOS does).
+    if (CFEqual(key, kCFURLVolumeIsRemovableKey) || CFEqual(key, kCFURLVolumeIsEjectableKey))
+    {
+        return removable ? kCFBooleanTrue : kCFBooleanFalse;
+    }
+    if (CFEqual(key, kCFURLVolumeIsLocalKey))
+    {
+        return local ? kCFBooleanTrue : kCFBooleanFalse;
+    }
+    if (CFEqual(key, kCFURLVolumeIsInternalKey))
+    {
+        // macOS gives no value (nil) for a disk image's volume, and YES for its internal disk.
+        return (local && !removable) ? kCFBooleanTrue : NULL;
+    }
+    if (CFEqual(key, kCFURLVolumeIsBrowsableKey))
+    {
+        return (st.f_flags & MNT_DONTBROWSE) ? kCFBooleanFalse : kCFBooleanTrue;
+    }
+    if (CFEqual(key, (CFStringRef)NSURLVolumeIsRootFileSystemKey))
+    {
+        return (st.f_flags & MNT_ROOTFS) ? kCFBooleanTrue : kCFBooleanFalse;
+    }
+    if (CFEqual(key, kCFURLVolumeIsAutomountedKey))
+    {
+        return (st.f_flags & MNT_AUTOMOUNTED) ? kCFBooleanTrue : kCFBooleanFalse;
+    }
+    if (CFEqual(key, kCFURLVolumeLocalizedFormatDescriptionKey))
+    {
+        return createVolumeFormatDescription(&st);
+    }
+    if (CFEqual(key, (CFStringRef)NSURLVolumeTypeNameKey))
+    {
+        return CFStringCreateWithCString(kCFAllocatorDefault, st.f_fstypename, kCFStringEncodingUTF8);
+    }
+    if (CFEqual(key, (CFStringRef)NSURLVolumeSubtypeKey))
+    {
+        int subtype = (int)st.f_fssubtype;
+        return CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &subtype);
+    }
+    if (CFEqual(key, (CFStringRef)NSURLVolumeMountFromLocationKey))
+    {
+        const char *from = strncmp(st.f_mntfromname, "/dev/", 5) == 0 ? st.f_mntfromname + 5 : st.f_mntfromname;
+        return CFStringCreateWithCString(kCFAllocatorDefault, from, kCFStringEncodingUTF8);
+    }
+    if (CFEqual(key, kCFURLVolumeURLKey))
+    {
+        return CFURLCreateFromFileSystemRepresentation(kCFAllocatorDefault, (const UInt8 *)st.f_mntonname,
+            strlen(st.f_mntonname), true);
+    }
+    if (CFEqual(key, kCFURLVolumeIdentifierKey))
+    {
+        return CFDataCreate(kCFAllocatorDefault, (const UInt8 *)&st.f_fsid, sizeof(st.f_fsid));
+    }
+    return NULL;
+}
 
 static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErrorRef *error)
 {
     CFTypeRef value = NULL;
     struct stat info;
     // NOTE: not all of the properties are currently supported, however the most common ones should have quasi-reasonable implementations
-    if (CFEqual(key, kCFURLNameKey))
+    if (isVolumeKey(key))
+    {
+        value = createVolumePropertyForKey(url, key);
+    }
+    else if (CFEqual(key, kCFURLNameKey))
     {
         // Key for the resource's name in the file system, returned as a CFString object. It is the last
         // path component as it is, extension included, and an item that is not there is a read error.
@@ -642,16 +911,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
     }
     else if (CFEqual(key, kCFURLIsHiddenKey))
     {
-        CFStringRef lastPathComp = CFURLCopyLastPathComponent(url);
-        Boolean isHidden = false;
-
-        if (CFStringGetLength(lastPathComp) > 0)
-        {
-            isHidden = CFStringGetCharacterAtIndex(lastPathComp, 0) == '.';
-        }
-
-        value = isHidden ? kCFBooleanTrue : kCFBooleanFalse;
-        CFRelease(lastPathComp);
+        value = CFURLIsHidden(url) ? kCFBooleanTrue : kCFBooleanFalse;
     }
     else if (CFEqual(key, kCFURLHasHiddenExtensionKey))
     {
@@ -749,10 +1009,6 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
             value = CFURLCreateCopyDeletingLastPathComponent(kCFAllocatorDefault, url);
         }
     }
-    else if (CFEqual(key, kCFURLVolumeURLKey))
-    {
-        // is this doable?
-    }
     else if (CFEqual(key, kCFURLTypeIdentifierKey))
     {
         // Key for the resource’s uniform type identifier (UTI), returned as a CFString object.
@@ -765,7 +1021,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
     else if (CFEqual(key, kCFURLLocalizedTypeDescriptionKey))
     {
         // Key for the resource’s localized type description, returned as a CFString object.
-
+        value = CFURLCreateLocalizedTypeDescription(url, error);
     }
     else if (CFEqual(key, kCFURLLabelNumberKey))
     {
@@ -803,10 +1059,6 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
         {
             resourceReadError(error);
         }
-    }
-    else if (CFEqual(key, kCFURLVolumeIdentifierKey))
-    {
-        
     }
     else if (CFEqual(key, kCFURLFileSizeKey))
     {
@@ -1197,7 +1449,8 @@ Boolean CFURLCopyResourcePropertyForKey(CFURLRef url, CFStringRef key, void *pro
         CFURLResourceInfoUpdateRelease(resourceInfo, key, value);
     }
 
-    if (value != NULL)
+    // The caller owns the value (the Copy rule). The URL's resource cache holds its own reference.
+    if (value != NULL && propertyValueTypeRefPtr == NULL)
     {
         CFRelease(value);
     }
@@ -1357,7 +1610,14 @@ static CFTypeRef CFURLSetPropertyForKey(CFURLRef url, CFStringRef key, CFTypeRef
     }
     else if (CFEqual(key, kCFURLIsHiddenKey) && CFGetTypeID(value) == CFBooleanGetTypeID())
     {
-        acceptedValue = CFRetain(value);
+        if (CFURLSetHidden(url, CFBooleanGetValue(value)))
+        {
+            acceptedValue = CFRetain(value);
+        }
+        else
+        {
+            posixError(error);
+        }
     }
     else if (CFEqual(key, kCFURLHasHiddenExtensionKey) && CFGetTypeID(value) == CFBooleanGetTypeID())
     {
@@ -1889,8 +2149,10 @@ CFDataRef CFURLCreateBookmarkData(CFAllocatorRef allocator, CFURLRef url, CFURLB
                             CFRelease(storable);
                         }
                     }
-                    // CFURLCopyResourcePropertyForKey hands out a value that the URL's own cache keeps alive and
-                    // that the caller does not own, so it is not released here (releasing it freed the cached value).
+                    if (value != NULL)
+                    {
+                        CFRelease(value);
+                    }
                 }
                 CFDictionarySetValue(record, CFURLBookmarkResourceValuesKey, values);
                 CFRelease(values);
@@ -2195,7 +2457,14 @@ static void CFURLReturnError(CFErrorRef cfError, NSError **error)
 
 - (BOOL)getResourceValue:(out id *)value forKey:(NSString *)key error:(out NSError **)error
 {
-    return CFURLCopyResourcePropertyForKey([self _cfurl], (CFStringRef)key, value, (CFErrorRef *)error);
+    BOOL ok = CFURLCopyResourcePropertyForKey([self _cfurl], (CFStringRef)key, value, (CFErrorRef *)error);
+
+    // The out value is autoreleased, so it stays valid after the URL is released.
+    if (value != NULL && *value != nil)
+    {
+        CFAutorelease((CFTypeRef)*value);
+    }
+    return ok;
 }
 
 - (NSDictionary *)resourceValuesForKeys:(NSArray *)keys error:(NSError **)error

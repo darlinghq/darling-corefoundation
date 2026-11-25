@@ -113,6 +113,7 @@ set(cf_c_sources
 	CFXMLPreferencesDomain.c
 	CFXMLTree.c
 	CFURLEnumerator.c
+	CFBundle_ResourceMap.c
 	CFXPCBridge.c
 	CFPasteboard.c
 	CFPasteboardService.c

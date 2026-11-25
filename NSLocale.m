@@ -230,7 +230,9 @@ NSString *const NSLocaleVariantCodeKey = @"kCFLocaleVariantCodeKey";
         return nil;
     }
     NSString *identifier = [aDecoder decodeObjectOfClass:objc_lookUpClass("NSString") forKey:@"NS.identifier"];
-    if (identifier == nil)
+    // Archived property-list values are not checked against the classes passed to
+    // -decodeObjectOfClass:forKey:, so the identifier's type is checked here.
+    if (![identifier isKindOfClass:objc_lookUpClass("NSString")])
     {
         return nil;
     }

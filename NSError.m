@@ -180,14 +180,16 @@ static id userInfoValue(NSError *error, NSString *key)
     return [desc autorelease];
 }
 
+// The failure reason and the recovery suggestion come from the userInfo, or else from the callback registered
+// for the error domain (see CFErrorSetCallBackForDomain), as the description does.
 - (NSString *)localizedFailureReason
 {
-    return userInfoValue(self, NSLocalizedFailureReasonErrorKey);
+    return [(NSString *)_CFErrorCreateLocalizedFailureReason((CFErrorRef)self) autorelease];
 }
 
 - (NSString *)localizedRecoverySuggestion
 {
-    return userInfoValue(self, NSLocalizedRecoverySuggestionErrorKey);
+    return [(NSString *)_CFErrorCreateLocalizedRecoverySuggestion((CFErrorRef)self) autorelease];
 }
 
 - (NSArray *)localizedRecoveryOptions
