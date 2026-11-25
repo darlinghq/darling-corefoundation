@@ -169,28 +169,51 @@ NSString *const NSMallocException = @"NSMallocException";
         CFNumberRef returnAddresses[128] = { nil };
 
         int count = backtrace(stack, sizeof(stack) / sizeof(stack[0]));
+        if (count <= 1) {
+            callStackSymbols = [[NSArray alloc] init];
+            NSArray *callStackReturnAddresses = [[NSArray alloc] init];
+            _reserved[@"callStackSymbols"] = callStackSymbols;
+            _reserved[@"callStackReturnAddresses"] = callStackReturnAddresses;
+            [callStackSymbols release];
+            [callStackReturnAddresses release];
+            return YES;
+        }
         char **sym = backtrace_symbols(stack, count);
         if (sym == NULL) {
             return NO;
         }
 
         // Make sure to skip this frame since it is just an instantiator.
+        int validCount = 0;
         for (int i = 1; i < count; i++) {
-            returnAddresses[i - 1] = CFNumberCreate(kCFAllocatorDefault, kCFNumberLongType, &stack[i]);
-            symbols[i - 1] = CFStringCreateWithCString(kCFAllocatorDefault, sym[i], kCFStringEncodingUTF8);
+            CFNumberRef addr = CFNumberCreate(kCFAllocatorDefault, kCFNumberLongType, &stack[i]);
+            CFStringRef s = (sym[i] != NULL)
+                ? CFStringCreateWithCString(kCFAllocatorDefault, sym[i], kCFStringEncodingUTF8)
+                : NULL;
+            if (s == NULL) {
+                s = CFStringCreateWithFormat(kCFAllocatorDefault, NULL, CFSTR("%p"), stack[i]);
+            }
+            if (addr != NULL && s != NULL) {
+                returnAddresses[validCount] = addr;
+                symbols[validCount] = s;
+                validCount++;
+            } else {
+                if (addr != NULL) CFRelease(addr);
+                if (s != NULL) CFRelease(s);
+            }
         }
 
         free(sym);
         callStackSymbols = [[NSArray alloc] initWithObjects: (id *) symbols
-                                                      count: count - 1];
+                                                      count: validCount];
         NSArray *callStackReturnAddresses = [[NSArray alloc] initWithObjects: (id *) returnAddresses
-                                                                       count: count - 1];
+                                                                       count: validCount];
         _reserved[@"callStackSymbols"] = callStackSymbols;
         _reserved[@"callStackReturnAddresses"] = callStackReturnAddresses;
 
-        for (int i = 1; i < count; i++) {
-            CFRelease(returnAddresses[i - 1]);
-            CFRelease(symbols[i - 1]);
+        for (int i = 0; i < validCount; i++) {
+            CFRelease(returnAddresses[i]);
+            CFRelease(symbols[i]);
         }
 
         [callStackSymbols release];
