@@ -269,7 +269,7 @@ CF_PRIVATE
     return [[[self alloc] initWithTimeIntervalSinceReferenceDate:[date timeIntervalSinceReferenceDate] + ti] autorelease];
 }
 
-+ (id)distantFuture
++ (NSDate *)distantFuture
 {
     static NSDate *distantFuture = nil;
     static dispatch_once_t onceToken;
@@ -280,7 +280,7 @@ CF_PRIVATE
     return distantFuture;
 }
 
-+ (id)distantPast
++ (NSDate *)distantPast
 {
     static NSDate *distantPast = nil;
     static dispatch_once_t onceToken;

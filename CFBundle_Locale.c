@@ -31,6 +31,8 @@
 #include <CoreFoundation/CFPreferences.h>
 
 #include <unicode/ualoc.h>
+#include <unicode/uloc.h>
+#include <stdlib.h>
 #include <ctype.h>
 
 static CFStringRef _CFBundleCopyLanguageFoundInLocalizations(CFArrayRef localizations, CFStringRef language);
@@ -672,64 +674,63 @@ static CFStringRef _CFBundleCopyLanguageFoundInLocalizations(CFArrayRef localiza
 }
 
 // Given a list of localizations (e.g., provided as argument to API, or present as .lproj directories), return a mutable array of localizations in preferred order. Returns NULL if nothing is found.
+//
+// DARLING: the choice is ICU's, made with ualoc_localizationsToUse() for the one language, which is
+// what macOS's CFBundle does: on macOS 26.7.3, CFBundleCopyLocalizationsForPreferences() gives what
+// that function gives whenever it finds anything (zh-TW in (zh-Hans, zh-Hant) gives zh-Hant; en in
+// (en, English) gives both). The callers fall back when nothing is found. Test:
+// tests/cfbundle-localizations-for-preferences.c in Darling's main repository.
 static CFMutableArrayRef _CFBundleCreateMutableArrayOfFallbackLanguages(CFArrayRef localizations, CFStringRef language) {
-    CFMutableArrayRef result = CFArrayCreateMutable(kCFAllocatorSystemDefault, 0, &kCFTypeArrayCallBacks);
-    
-    // Check for the language itself (in whatever form)
-    CFStringRef languageInLocalizations = _CFBundleCopyLanguageFoundInLocalizations(localizations, language);
-    if (languageInLocalizations) {
-        CFArrayAppendValue(result, languageInLocalizations);
-        CFRelease(languageInLocalizations);
+    CFIndex count = localizations ? CFArrayGetCount(localizations) : 0;
+    char preferred[ULOC_FULLNAME_CAPACITY];
+    if (count == 0 || !language || !CFStringGetCString(language, preferred, sizeof(preferred), kCFStringEncodingUTF8)) {
+        return NULL;
     }
-    
-    // Languages form a tree in ICU data. For example:
-    
-    //   en_IN -> en_GB -> en_001 -> en -> root
-    // or
-    //   zh_Hant_MO -> zh_Hant_HK -> zh_Hant -> zh_TW -> root
-    // or
-    //   zh_Hans -> zh -> zh_CN -> root
-    
-    // We will iterate through each element until we get to root, adding the entries to our resulting list of preferred languages as we go if they exist in the localizations list.
-    
-    char locale[128];
-    if (CFStringGetCString(language, locale, 128, kCFStringEncodingUTF8)) {
-        UErrorCode error = U_ZERO_ERROR;
-        char parent[128];
-        
-        int counter = 0;
-        while (1) {
-            ualoc_getAppleParent(locale, parent, 128, &error);
-            if (error != U_ZERO_ERROR) break;
-            if (strncmp(parent, "root", 4) == 0) break;
-            
-            CFStringRef parentString = CFStringCreateWithCString(kCFAllocatorSystemDefault, parent, kCFStringEncodingUTF8);
-            if (parentString) {
-                CFStringRef parentInLocalizations = _CFBundleCopyLanguageFoundInLocalizations(localizations, parentString);
-                if (parentInLocalizations) {
-                    // Be sure not to add the same language to the result array twice. This can happen when the above function canonicalizes names (e.g., zh_TW -> zh_Hans).
-                    if (!CFArrayContainsValue(result, CFRangeMake(0, CFArrayGetCount(result)), parentInLocalizations)) {
-                        CFArrayAppendValue(result, parentInLocalizations);
-                    }
-                    CFRelease(parentInLocalizations);
-                }
-                CFRelease(parentString);
+
+    // ICU takes C strings; a localization whose name does not fit is left out, as it cannot match.
+    char (*names)[ULOC_FULLNAME_CAPACITY] = malloc(count * sizeof(*names));
+    const char **available = malloc(count * sizeof(*available));
+    CFStringRef *sources = malloc(count * sizeof(*sources));
+    const char **chosen = malloc(count * sizeof(*chosen));
+    CFMutableArrayRef result = NULL;
+    if (names && available && sources && chosen) {
+        int32_t availableCount = 0;
+        for (CFIndex i = 0; i < count; i++) {
+            CFStringRef localization = (CFStringRef)CFArrayGetValueAtIndex(localizations, i);
+            if (CFGetTypeID(localization) == CFStringGetTypeID()
+                && CFStringGetCString(localization, names[availableCount], ULOC_FULLNAME_CAPACITY, kCFStringEncodingUTF8)) {
+                available[availableCount] = names[availableCount];
+                sources[availableCount] = localization;
+                availableCount++;
             }
-            
-            // The parent now becomes the locale we enter in the next loop
-            if (strlcpy(locale, parent, 128) >= 128) break;
-            
-            // Just in case the call into ICU to get the parent locale results in a cycle, we need a fallback mechanism to break out of this while loop. Therefore we'll only fallback a max of 16 times.
-            counter++;
-            if (counter >= 16) break;
+        }
+
+        const char *preferredList[1] = { preferred };
+        UErrorCode error = U_ZERO_ERROR;
+        int32_t chosenCount = ualoc_localizationsToUse(preferredList, 1, available, availableCount, chosen, (int32_t)count, &error);
+        if (U_SUCCESS(error) && chosenCount > 0) {
+            result = CFArrayCreateMutable(kCFAllocatorSystemDefault, 0, &kCFTypeArrayCallBacks);
+            for (int32_t i = 0; i < chosenCount; i++) {
+                // ICU hands back the strings it was given; answer with the caller's own objects.
+                for (int32_t j = 0; j < availableCount; j++) {
+                    if (chosen[i] == available[j]) {
+                        if (!CFArrayContainsValue(result, CFRangeMake(0, CFArrayGetCount(result)), sources[j])) {
+                            CFArrayAppendValue(result, sources[j]);
+                        }
+                        break;
+                    }
+                }
+            }
+            if (CFArrayGetCount(result) == 0) {
+                CFRelease(result);
+                result = NULL;
+            }
         }
     }
-    
-    if (CFArrayGetCount(result) == 0) {
-        CFRelease(result);
-        result = NULL;
-    }
-    
+    free(names);
+    free(available);
+    free(sources);
+    free(chosen);
     return result;
 }
 
@@ -977,3 +978,40 @@ CF_PRIVATE CFArrayRef _CFBundleCopyLanguageSearchListInDirectory(CFURLRef url, u
     return result;
 }
 
+
+#if TARGET_OS_MAC
+#include <xpc/xpc.h>
+
+// Records the languages a process launched over XPC should use for its bundles: the bootstrap
+// dictionary gets an "_NSBundleEntry" dictionary whose "MainBundleLanguages" array holds them,
+// and keeps its other entries (observed on macOS 26.7.3). Test: tests/cfbundle-xpc-bootstrap.c.
+void _CFBundleSetupXPCBootstrapWithLanguages(xpc_object_t bootstrap, CFArrayRef languages) {
+    if (bootstrap == NULL || xpc_get_type(bootstrap) != XPC_TYPE_DICTIONARY) return;
+
+    xpc_object_t array = xpc_array_create(NULL, 0);
+    CFIndex count = languages ? CFArrayGetCount(languages) : 0;
+    for (CFIndex i = 0; i < count; i++) {
+        CFStringRef language = (CFStringRef)CFArrayGetValueAtIndex(languages, i);
+        char buffer[256];
+        if (language && CFGetTypeID(language) == CFStringGetTypeID() && CFStringGetCString(language, buffer, sizeof(buffer), kCFStringEncodingUTF8)) {
+            xpc_array_set_string(array, XPC_ARRAY_APPEND, buffer);
+        }
+    }
+
+    xpc_object_t entry = xpc_dictionary_create(NULL, NULL, 0);
+    xpc_dictionary_set_value(entry, "MainBundleLanguages", array);
+    xpc_dictionary_set_value(bootstrap, "_NSBundleEntry", entry);
+    xpc_release(entry);
+    xpc_release(array);
+}
+
+// The languages are the ones the main bundle is shown in.
+void _CFBundleSetupXPCBootstrap(xpc_object_t bootstrap) {
+    CFBundleRef mainBundle = CFBundleGetMainBundle();
+    CFArrayRef localizations = mainBundle ? CFBundleCopyBundleLocalizations(mainBundle) : NULL;
+    CFArrayRef languages = localizations ? CFBundleCopyPreferredLocalizationsFromArray(localizations) : NULL;
+    _CFBundleSetupXPCBootstrapWithLanguages(bootstrap, languages);
+    if (languages) CFRelease(languages);
+    if (localizations) CFRelease(localizations);
+}
+#endif

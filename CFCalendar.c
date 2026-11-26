@@ -131,12 +131,15 @@ static void __CFCalendarZapCal(CFCalendarRef calendar) {
     calendar->_cal = NULL;
 }
 
+extern void __CFLocaleApplyCalendarPrefs(CFLocaleRef locale, CFStringRef calendarID, CFCalendarRef calendar);
+
 CFCalendarRef CFCalendarCopyCurrent(void) {
     CFLocaleRef locale = CFLocaleCopyCurrent();
     CFCalendarRef calID = (CFCalendarRef)CFLocaleGetValue(locale, kCFLocaleCalendarIdentifier);
     if (calID) {
         CFCalendarRef calendar = CFCalendarCreateWithIdentifier(kCFAllocatorSystemDefault, (CFStringRef)calID);
         CFCalendarSetLocale(calendar, locale);
+        __CFLocaleApplyCalendarPrefs(locale, (CFStringRef)calID, calendar);
 	CFRelease(locale);
         return calendar;
     }

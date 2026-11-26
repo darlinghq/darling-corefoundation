@@ -92,97 +92,97 @@ CF_PRIVATE
     return set;
 }
 
-+ (id)controlCharacterSet
++ (NSCharacterSet *)controlCharacterSet
 {
     return (id)CFCharacterSetGetPredefined(kCFCharacterSetControl);
 }
 
-+ (id)whitespaceCharacterSet
++ (NSCharacterSet *)whitespaceCharacterSet
 {
     return (id)CFCharacterSetGetPredefined(kCFCharacterSetWhitespace);
 }
 
-+ (id)whitespaceAndNewlineCharacterSet
++ (NSCharacterSet *)whitespaceAndNewlineCharacterSet
 {
     return (id)CFCharacterSetGetPredefined(kCFCharacterSetWhitespaceAndNewline);
 }
 
-+ (id)decimalDigitCharacterSet
++ (NSCharacterSet *)decimalDigitCharacterSet
 {
     return (id)CFCharacterSetGetPredefined(kCFCharacterSetDecimalDigit);
 }
 
-+ (id)letterCharacterSet
++ (NSCharacterSet *)letterCharacterSet
 {
     return (id)CFCharacterSetGetPredefined(kCFCharacterSetLetter);
 }
 
-+ (id)lowercaseLetterCharacterSet
++ (NSCharacterSet *)lowercaseLetterCharacterSet
 {
     return (id)CFCharacterSetGetPredefined(kCFCharacterSetLowercaseLetter);
 }
 
-+ (id)uppercaseLetterCharacterSet
++ (NSCharacterSet *)uppercaseLetterCharacterSet
 {
     return (id)CFCharacterSetGetPredefined(kCFCharacterSetUppercaseLetter);
 }
 
-+ (id)nonBaseCharacterSet
++ (NSCharacterSet *)nonBaseCharacterSet
 {
     return (id)CFCharacterSetGetPredefined(kCFCharacterSetNonBase);
 }
 
-+ (id)alphanumericCharacterSet
++ (NSCharacterSet *)alphanumericCharacterSet
 {
     return (id)CFCharacterSetGetPredefined(kCFCharacterSetAlphaNumeric);
 }
 
-+ (id)decomposableCharacterSet
++ (NSCharacterSet *)decomposableCharacterSet
 {
     return (id)CFCharacterSetGetPredefined(kCFCharacterSetDecomposable);
 }
 
-+ (id)illegalCharacterSet
++ (NSCharacterSet *)illegalCharacterSet
 {
     return (id)CFCharacterSetGetPredefined(kCFCharacterSetIllegal);
 }
 
-+ (id)punctuationCharacterSet
++ (NSCharacterSet *)punctuationCharacterSet
 {
     return (id)CFCharacterSetGetPredefined(kCFCharacterSetPunctuation);
 }
 
-+ (id)capitalizedLetterCharacterSet
++ (NSCharacterSet *)capitalizedLetterCharacterSet
 {
     return (id)CFCharacterSetGetPredefined(kCFCharacterSetCapitalizedLetter);
 }
 
-+ (id)symbolCharacterSet
++ (NSCharacterSet *)symbolCharacterSet
 {
     return (id)CFCharacterSetGetPredefined(kCFCharacterSetSymbol);
 }
 
-+ (id)newlineCharacterSet
++ (NSCharacterSet *)newlineCharacterSet
 {
     return (id)CFCharacterSetGetPredefined(kCFCharacterSetNewline);
 }
 
-+ (id)characterSetWithRange:(NSRange)range
++ (NSCharacterSet *)characterSetWithRange:(NSRange)range
 {
     return [(NSCharacterSet *)CFCharacterSetCreateWithCharactersInRange(kCFAllocatorDefault, CFRangeMake(range.location, range.length)) autorelease];
 }
 
-+ (id)characterSetWithCharactersInString:(NSString *)string
++ (NSCharacterSet *)characterSetWithCharactersInString:(NSString *)string
 {
     return [(NSCharacterSet *)CFCharacterSetCreateWithCharactersInString(kCFAllocatorDefault, (CFStringRef)string) autorelease];
 }
 
-+ (id)characterSetWithBitmapRepresentation:(NSData *)data
++ (NSCharacterSet *)characterSetWithBitmapRepresentation:(NSData *)data
 {
     return [(NSCharacterSet *)CFCharacterSetCreateWithBitmapRepresentation(kCFAllocatorDefault, (CFDataRef)data) autorelease];
 }
 
-+ (id)characterSetWithContentsOfFile:(NSString *)path
++ (NSCharacterSet *)characterSetWithContentsOfFile:(NSString *)path
 {
     return [self characterSetWithBitmapRepresentation:[NSData dataWithContentsOfMappedFile:path]];
 }
@@ -384,97 +384,97 @@ static CFCharacterSetRef CreateCharacterSetFromArchive(NSCoder *coder)
 
 @implementation NSMutableCharacterSet
 
-+ (id)characterSetWithContentsOfFile:(NSString *)path
++ (NSMutableCharacterSet *)characterSetWithContentsOfFile:(NSString *)path
 {
     return [[[NSCharacterSet characterSetWithContentsOfFile:path] mutableCopyWithZone:nil] autorelease];
 }
 
-+ (id)characterSetWithBitmapRepresentation:(NSData *)data
++ (NSMutableCharacterSet *)characterSetWithBitmapRepresentation:(NSData *)data
 {
     return [[[NSCharacterSet characterSetWithBitmapRepresentation:data] mutableCopyWithZone:nil] autorelease];
 }
 
-+ (id)newlineCharacterSet
++ (NSMutableCharacterSet *)newlineCharacterSet
 {
     return [[[NSCharacterSet newlineCharacterSet] mutableCopyWithZone:nil] autorelease];
 }
 
-+ (id)symbolCharacterSet
++ (NSMutableCharacterSet *)symbolCharacterSet
 {
     return [[[NSCharacterSet symbolCharacterSet] mutableCopyWithZone:nil] autorelease];
 }
 
-+ (id)capitalizedLetterCharacterSet
++ (NSMutableCharacterSet *)capitalizedLetterCharacterSet
 {
     return [[[NSCharacterSet capitalizedLetterCharacterSet] mutableCopyWithZone:nil] autorelease];
 }
 
-+ (id)punctuationCharacterSet
++ (NSMutableCharacterSet *)punctuationCharacterSet
 {
     return [[[NSCharacterSet punctuationCharacterSet] mutableCopyWithZone:nil] autorelease];
 }
 
-+ (id)illegalCharacterSet
++ (NSMutableCharacterSet *)illegalCharacterSet
 {
     return [[[NSCharacterSet illegalCharacterSet] mutableCopyWithZone:nil] autorelease];
 }
 
-+ (id)decomposableCharacterSet
++ (NSMutableCharacterSet *)decomposableCharacterSet
 {
     return [[[NSCharacterSet decomposableCharacterSet] mutableCopyWithZone:nil] autorelease];
 }
 
-+ (id)alphanumericCharacterSet
++ (NSMutableCharacterSet *)alphanumericCharacterSet
 {
     return [[[NSCharacterSet alphanumericCharacterSet] mutableCopyWithZone:nil] autorelease];
 }
 
-+ (id)nonBaseCharacterSet
++ (NSMutableCharacterSet *)nonBaseCharacterSet
 {
     return [[[NSCharacterSet nonBaseCharacterSet] mutableCopyWithZone:nil] autorelease];
 }
 
-+ (id)uppercaseLetterCharacterSet
++ (NSMutableCharacterSet *)uppercaseLetterCharacterSet
 {
     return [[[NSCharacterSet uppercaseLetterCharacterSet] mutableCopyWithZone:nil] autorelease];
 }
 
-+ (id)lowercaseLetterCharacterSet
++ (NSMutableCharacterSet *)lowercaseLetterCharacterSet
 {
     return [[[NSCharacterSet lowercaseLetterCharacterSet] mutableCopyWithZone:nil] autorelease];
 }
 
-+ (id)letterCharacterSet
++ (NSMutableCharacterSet *)letterCharacterSet
 {
     return [[[NSCharacterSet letterCharacterSet] mutableCopyWithZone:nil] autorelease];
 }
 
-+ (id)decimalDigitCharacterSet
++ (NSMutableCharacterSet *)decimalDigitCharacterSet
 {
     return [[[NSCharacterSet decimalDigitCharacterSet] mutableCopyWithZone:nil] autorelease];
 }
 
-+ (id)whitespaceAndNewlineCharacterSet
++ (NSMutableCharacterSet *)whitespaceAndNewlineCharacterSet
 {
     return [[[NSCharacterSet whitespaceAndNewlineCharacterSet] mutableCopyWithZone:nil] autorelease];
 }
 
-+ (id)whitespaceCharacterSet
++ (NSMutableCharacterSet *)whitespaceCharacterSet
 {
     return [[[NSCharacterSet whitespaceCharacterSet] mutableCopyWithZone:nil] autorelease];
 }
 
-+ (id)controlCharacterSet
++ (NSMutableCharacterSet *)controlCharacterSet
 {
     return [[[NSCharacterSet controlCharacterSet] mutableCopyWithZone:nil] autorelease];
 }
 
-+ (id)characterSetWithCharactersInString:(NSString *)string
++ (NSMutableCharacterSet *)characterSetWithCharactersInString:(NSString *)string
 {
     return [[[NSCharacterSet characterSetWithCharactersInString:string] mutableCopyWithZone:nil] autorelease];
 }
 
-+ (id)characterSetWithRange:(NSRange)range
++ (NSMutableCharacterSet *)characterSetWithRange:(NSRange)range
 {
     return [[[NSCharacterSet characterSetWithRange:range] mutableCopyWithZone:nil] autorelease];
 }

@@ -47,6 +47,15 @@ int main(void)
     values = [gone promisedItemResourceValuesForKeys: keys error: &error];
     expect(values == nil && [error code] == NSFileReadNoSuchFileError, @"a missing item gives nil and NSFileReadNoSuchFileError");
 
+    id value = nil;
+    error = nil;
+    expect([url getPromisedItemResourceValue: &value forKey: NSURLNameKey error: &error] && error == nil
+           && [value isEqual: @"plain.txt"], @"one resource value of an existing item");
+    value = @"unchanged";
+    error = nil;
+    expect(![gone getPromisedItemResourceValue: &value forKey: NSURLNameKey error: &error] && [value isEqual: @"unchanged"]
+           && [error code] == NSFileReadNoSuchFileError, @"a missing item gives NO and NSFileReadNoSuchFileError, and no value");
+
     unlink([file fileSystemRepresentation]);
     rmdir(dir);
     [pool drain];

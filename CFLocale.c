@@ -197,6 +197,13 @@ CF_INLINE void __CFLocaleUnlock(CFLocaleRef locale) {
 }
 
 
+// CFEqual of two dictionaries that may be NULL
+static Boolean __CFLocalePrefsEqual(CFDictionaryRef prefs1, CFDictionaryRef prefs2) {
+    if (prefs1 == prefs2) return true;
+    if (NULL == prefs1 || NULL == prefs2) return false;
+    return CFEqual(prefs1, prefs2);
+}
+
 static Boolean __CFLocaleEqual(CFTypeRef cf1, CFTypeRef cf2) {
     CFLocaleRef locale1 = (CFLocaleRef)cf1;
     CFLocaleRef locale2 = (CFLocaleRef)cf2;
@@ -207,7 +214,7 @@ static Boolean __CFLocaleEqual(CFTypeRef cf1, CFTypeRef cf2) {
     if (NULL != locale1->_overrides && NULL == locale2->_overrides) return false;
     if (NULL != locale1->_overrides && !CFEqual(locale1->_overrides, locale2->_overrides)) return false;
     if (__kCFLocaleUser == __CFLocaleGetType(locale1)) {
-        return CFEqual(locale1->_prefs, locale2->_prefs);
+        return __CFLocalePrefsEqual(locale1->_prefs, locale2->_prefs);
     }
     return true;
 }
@@ -299,6 +306,27 @@ static CFLocaleRef __CFLocaleCurrent = NULL;
 #define FALLBACK_LOCALE_NAME CFSTR("en_US")
 #endif
 
+// The user's preferences that change what the current locale produces: the numbers and dates
+// they format, the first day of the week, the units, the preferred languages. NULL when none is set.
+static CFDictionaryRef __CFLocaleCopyUserPrefs(void) {
+    static const CFStringRef keys[] = {
+        CFSTR("AppleLanguages"), CFSTR("AppleCollationOrder"), CFSTR("AppleFirstWeekday"), CFSTR("AppleMinDaysInFirstWeek"),
+        CFSTR("AppleICUForce24HourTime"), CFSTR("AppleICUForce12HourTime"), CFSTR("AppleMeasurementUnits"), CFSTR("AppleMetricUnits"),
+        CFSTR("AppleICUDateTimeSymbols"), CFSTR("AppleICUDateFormatStrings"), CFSTR("AppleICUTimeFormatStrings"),
+        CFSTR("AppleICUNumberFormatStrings"), CFSTR("AppleICUNumberSymbols")
+    };
+    CFMutableDictionaryRef prefs = NULL;
+    for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+        CFPropertyListRef value = CFPreferencesCopyAppValue(keys[i], kCFPreferencesCurrentApplication);
+        if (value) {
+            if (!prefs) prefs = CFDictionaryCreateMutable(kCFAllocatorSystemDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+            CFDictionarySetValue(prefs, keys[i], value);
+            CFRelease(value);
+        }
+    }
+    return prefs;
+}
+
 static CFLocaleRef _CFLocaleCopyCurrentGuts(CFStringRef name, Boolean useCache, CFDictionaryRef overridePrefs) {
     
     CFStringRef ident = NULL;
@@ -315,11 +343,15 @@ static CFLocaleRef _CFLocaleCopyCurrentGuts(CFStringRef name, Boolean useCache, 
     }
     if (name) CFRelease(name);
     
+    // The preferences are read each time, so that the cached current locale is replaced when the user
+    // changes one (a 24-hour clock, the first day of the week) as well as when the region changes.
+    CFDictionaryRef prefs = overridePrefs ? (CFDictionaryRef)CFRetain(overridePrefs) : __CFLocaleCopyUserPrefs();
+
     if (useCache) {
         CFLocaleRef oldLocale = NULL;
         __CFLocaleLockGlobal();
         if (__CFLocaleCurrent) {
-            if (ident && !CFEqual(__CFLocaleCurrent->_identifier, ident)) {
+            if ((ident && !CFEqual(__CFLocaleCurrent->_identifier, ident)) || !__CFLocalePrefsEqual(__CFLocaleCurrent->_prefs, prefs)) {
                 oldLocale = __CFLocaleCurrent;
                 __CFLocaleCurrent = NULL;
             } else {
@@ -327,15 +359,14 @@ static CFLocaleRef _CFLocaleCopyCurrentGuts(CFStringRef name, Boolean useCache, 
                 CFRetain(res);
                 __CFLocaleUnlockGlobal();
                 if (ident) CFRelease(ident);
+                if (prefs) CFRelease(prefs);
                 return res;
             }
         }
         __CFLocaleUnlockGlobal();
         if (oldLocale) CFRelease(oldLocale);
     }
-    
-    CFDictionaryRef prefs = NULL;
-    
+
     struct __CFLocale *locale;
     uint32_t size = sizeof(struct __CFLocale) - sizeof(CFRuntimeBase);
     locale = (struct __CFLocale *)_CFRuntimeCreateInstance(kCFAllocatorSystemDefault, CFLocaleGetTypeID(), size, NULL);
@@ -970,32 +1001,38 @@ static bool __CFLocaleCopyCalendarID(CFLocaleRef locale, bool user, CFTypeRef *c
     return true;
 }
 
+// The user's first day of the week and minimum days in the first week (dictionaries from the
+// calendar's identifier to a number) for a calendar of the locale.
+CF_PRIVATE void __CFLocaleApplyCalendarPrefs(CFLocaleRef locale, CFStringRef calendarID, CFCalendarRef calendar) {
+    CFDictionaryRef prefs = __CFLocaleGetPrefs(locale);
+    CFPropertyListRef metapref = prefs ? CFDictionaryGetValue(prefs, CFSTR("AppleFirstWeekday")) : NULL;
+    if (NULL != metapref && CFGetTypeID(metapref) == CFDictionaryGetTypeID()) {
+        metapref = (CFNumberRef)CFDictionaryGetValue((CFDictionaryRef)metapref, calendarID);
+    }
+    if (NULL != metapref && CFGetTypeID(metapref) == CFNumberGetTypeID()) {
+        CFIndex wkdy;
+        if (CFNumberGetValue((CFNumberRef)metapref, kCFNumberCFIndexType, &wkdy)) {
+            CFCalendarSetFirstWeekday(calendar, wkdy);
+        }
+    }
+    metapref = prefs ? CFDictionaryGetValue(prefs, CFSTR("AppleMinDaysInFirstWeek")) : NULL;
+    if (NULL != metapref && CFGetTypeID(metapref) == CFDictionaryGetTypeID()) {
+        metapref = (CFNumberRef)CFDictionaryGetValue((CFDictionaryRef)metapref, calendarID);
+    }
+    if (NULL != metapref && CFGetTypeID(metapref) == CFNumberGetTypeID()) {
+        CFIndex mwd;
+        if (CFNumberGetValue((CFNumberRef)metapref, kCFNumberCFIndexType, &mwd)) {
+            CFCalendarSetMinimumDaysInFirstWeek(calendar, mwd);
+        }
+    }
+}
+
 static bool __CFLocaleCopyCalendar(CFLocaleRef locale, bool user, CFTypeRef *cf, CFStringRef context) {
 #if DEPLOYMENT_TARGET_MACOSX || DEPLOYMENT_TARGET_EMBEDDED || DEPLOYMENT_TARGET_WINDOWS || DEPLOYMENT_TARGET_LINUX
     if (__CFLocaleCopyCalendarID(locale, user, cf, context)) {
 	CFCalendarRef calendar = CFCalendarCreateWithIdentifier(kCFAllocatorSystemDefault, (CFStringRef)*cf);
 	CFCalendarSetLocale(calendar, locale);
-        CFDictionaryRef prefs = __CFLocaleGetPrefs(locale);
-        CFPropertyListRef metapref = prefs ? CFDictionaryGetValue(prefs, CFSTR("AppleFirstWeekday")) : NULL;
-        if (NULL != metapref && CFGetTypeID(metapref) == CFDictionaryGetTypeID()) {
-            metapref = (CFNumberRef)CFDictionaryGetValue((CFDictionaryRef)metapref, *cf);
-        }
-        if (NULL != metapref && CFGetTypeID(metapref) == CFNumberGetTypeID()) {
-            CFIndex wkdy;
-            if (CFNumberGetValue((CFNumberRef)metapref, kCFNumberCFIndexType, &wkdy)) {
-                CFCalendarSetFirstWeekday(calendar, wkdy);
-            }
-        }
-        metapref = prefs ? CFDictionaryGetValue(prefs, CFSTR("AppleMinDaysInFirstWeek")) : NULL;
-        if (NULL != metapref && CFGetTypeID(metapref) == CFDictionaryGetTypeID()) {
-            metapref = (CFNumberRef)CFDictionaryGetValue((CFDictionaryRef)metapref, *cf);
-        }
-        if (NULL != metapref && CFGetTypeID(metapref) == CFNumberGetTypeID()) {
-            CFIndex mwd;
-            if (CFNumberGetValue((CFNumberRef)metapref, kCFNumberCFIndexType, &mwd)) {
-                CFCalendarSetMinimumDaysInFirstWeek(calendar, mwd);
-            }
-        }
+        __CFLocaleApplyCalendarPrefs(locale, (CFStringRef)*cf, calendar);
 	CFRelease(*cf);
 	*cf = calendar;
 	return true;

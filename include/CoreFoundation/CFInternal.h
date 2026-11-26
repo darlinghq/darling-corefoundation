@@ -846,6 +846,11 @@ CF_INLINE dispatch_queue_t __CFDispatchQueueGetGenericBackground(void) {
 
 CF_PRIVATE void __CFAttributedStringInitialize(void);
 
+// The value that the user info value provider of the error's domain, set with
+// +[NSError setUserInfoValueProviderForDomain:provider:], gives for a key;
+// NULL when the domain has none or it gives nil. Defined in NSError.m.
+CF_PRIVATE CFTypeRef _CFErrorCopyValueFromProvider(CFErrorRef err, CFStringRef key);
+
 CF_EXTERN_C_END
 
 #endif /* ! __COREFOUNDATION_CFINTERNAL__ */

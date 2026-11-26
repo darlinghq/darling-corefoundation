@@ -86,6 +86,9 @@ CF_EXPORT CFURLRef _CFURLCreateFromPropertyListRepresentation(CFAllocatorRef all
 
 CF_EXPORT void CFPreferencesFlushCaches(void);
 
+// Keeps the process's preference changes in memory only, never saving them, while set.
+CF_EXPORT void _CFPrefsSetReadOnly(Boolean flag);
+
 
 
 #if TARGET_OS_WIN32
@@ -273,6 +276,10 @@ typedef CF_ENUM(CFIndex, CFSystemVersion) {
 };
 
 CF_EXPORT Boolean _CFExecutableLinkedOnOrAfter(CFSystemVersion version);
+
+/* True when the running application has the bundle identifier and a
+   CFBundleShortVersionString below the version (see CFAppVersionCheck.c). */
+CF_EXPORT Boolean _CFAppVersionCheckLessThan(CFStringRef bundleID, int linkedOnAnOlderSystemThan, double versionNumberLessThan);
 
 
 typedef CF_ENUM(CFIndex, CFStringCharacterClusterType) {
