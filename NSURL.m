@@ -886,6 +886,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
     }
     else if (CFEqual(key, kCFURLIsExcludedFromBackupKey))
     {
+        // CFBoolean statics are immortal (CFRuntime.h:231-233), so no CFRetain: CFRelease returns at once (CFRuntime.c:1438).
         value = kCFBooleanTrue;
     }
     else if (CFEqual(key, kCFURLFileResourceTypeKey))
@@ -952,6 +953,7 @@ static CFTypeRef CFURLCreatePropertyForKey(CFURLRef url, CFStringRef key, CFErro
         // reported as lacking them. That is the conservative answer (callers fall
         // back to the generic code path) and has not been checked against macOS
         // for any particular file system.
+        // CFBoolean statics are immortal (CFRuntime.h:231-233), so no CFRetain: CFRelease returns at once (CFRuntime.c:1438).
         value = kCFBooleanFalse;
     }
     else if (CFEqual(key, kCFURLVolumeTotalCapacityKey))
@@ -1197,7 +1199,8 @@ Boolean CFURLCopyResourcePropertyForKey(CFURLRef url, CFStringRef key, void *pro
         CFURLResourceInfoUpdateRelease(resourceInfo, key, value);
     }
 
-    if (value != NULL)
+    // With an out pointer, the reference held here goes to the caller (the Copy rule).
+    if (value != NULL && propertyValueTypeRefPtr == NULL)
     {
         CFRelease(value);
     }
@@ -1888,9 +1891,8 @@ CFDataRef CFURLCreateBookmarkData(CFAllocatorRef allocator, CFURLRef url, CFURLB
                             CFDictionarySetValue(values, key, storable);
                             CFRelease(storable);
                         }
+                        CFRelease(value);
                     }
-                    // CFURLCopyResourcePropertyForKey hands out a value that the URL's own cache keeps alive and
-                    // that the caller does not own, so it is not released here (releasing it freed the cached value).
                 }
                 CFDictionarySetValue(record, CFURLBookmarkResourceValuesKey, values);
                 CFRelease(values);
@@ -2195,7 +2197,17 @@ static void CFURLReturnError(CFErrorRef cfError, NSError **error)
 
 - (BOOL)getResourceValue:(out id *)value forKey:(NSString *)key error:(out NSError **)error
 {
-    return CFURLCopyResourcePropertyForKey([self _cfurl], (CFStringRef)key, value, (CFErrorRef *)error);
+    CFTypeRef owned = NULL;
+    BOOL ok = CFURLCopyResourcePropertyForKey([self _cfurl], (CFStringRef)key, &owned, (CFErrorRef *)error);
+    if (value != NULL)
+    {
+        *value = [(id)owned autorelease];
+    }
+    else
+    {
+        [(id)owned release];
+    }
+    return ok;
 }
 
 - (NSDictionary *)resourceValuesForKeys:(NSArray *)keys error:(NSError **)error
