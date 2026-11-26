@@ -11,6 +11,9 @@ for m in 0 1 n 2 real; do
 done
 ```
 
+On i386 the test prints SKIP: 32-bit processes install no exception preprocessor, so
+`_installStackTraceKeyIfNeeded` is not reached when an exception is thrown.
+
 Checks:
 - `TEST_BACKTRACE_MODE=0`: `backtrace()` returns `0` (must not underflow `count - 1`
   to `(NSUInteger)-1` in `+[__NSArrayI __new:::]` or segfault in `CFRetain`; returns

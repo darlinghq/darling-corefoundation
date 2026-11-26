@@ -11,6 +11,12 @@ static void expect(BOOL cond, const char *msg) {
 }
 
 int main(void) {
+#ifdef __i386__
+    // 32-bit processes use the legacy exception model: -[NSException _installStackTraceKeyIfNeeded] is not
+    // called when an exception is thrown (no exception preprocessor), so there is nothing to test.
+    puts("SKIP: no stack trace key installation on i386");
+    return 0;
+#endif
     @autoreleasepool {
         const char *mode = getenv("TEST_BACKTRACE_MODE");
         @try {
