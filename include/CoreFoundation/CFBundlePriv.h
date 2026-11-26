@@ -261,6 +261,9 @@ CFURLRef _CFBundleCopyFrameworkURLForExecutablePath(CFStringRef executablePath);
 #include <xpc/xpc.h>
 CF_EXPORT
 void _CFBundleSetupXPCBootstrap(xpc_object_t bootstrap) CF_AVAILABLE(10_10, 8_0);
+
+CF_EXPORT
+void _CFBundleSetupXPCBootstrapWithLanguages(xpc_object_t bootstrap, CFArrayRef appleLanguages) API_AVAILABLE(macos(10.16), ios(14.0), watchos(7.0), tvos(14.0));
 #endif
 
 /* Functions deprecated as SPI */

@@ -118,6 +118,7 @@ set(cf_c_sources
 	CFPasteboard.c
 	CFPasteboardService.c
 	CFPasteboardStore.c
+	CFAppVersionCheck.c
 )
 
 # CFURLComponents comes unmodified from the swift-corelibs-foundation

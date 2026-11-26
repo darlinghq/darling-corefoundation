@@ -33,6 +33,8 @@
 #include <CoreFoundation/CFNumber.h>
 #include <CoreFoundation/CFDate.h>
 #include "CFInternal.h"
+
+CF_PRIVATE Boolean __CFPreferencesIsReadOnly(void);
 #include <time.h>
 #if DEPLOYMENT_TARGET_MACOSX
 #include <unistd.h>
@@ -430,7 +432,8 @@ static void writeXMLValue(CFTypeRef context, void *xmlDomain, CFStringRef key, C
 	// We must append first so key gets another retain (in case we're
 	// about to remove it from the dictionary, and that's the sole reference)
     // This should be a set not an array.
-    if (!CFArrayContainsValue(domain->_dirtyKeys, CFRangeMake(0, CFArrayGetCount(domain->_dirtyKeys)), key)) {
+    // A read-only process changes only its cached value, which is never saved.
+    if (!__CFPreferencesIsReadOnly() && !CFArrayContainsValue(domain->_dirtyKeys, CFRangeMake(0, CFArrayGetCount(domain->_dirtyKeys)), key)) {
 	CFArrayAppendValue(domain->_dirtyKeys, key);
     }
     if (value) {
@@ -497,6 +500,11 @@ static Boolean synchronizeXMLDomain(CFTypeRef context, void *xmlDomain) {
     Boolean success, tryAgain;
     
     __CFLock(&domain->_lock);
+    if (__CFPreferencesIsReadOnly()) {
+        // Keep the cached values, including unsaved ones, and write nothing.
+        __CFUnlock(&domain->_lock);
+        return true;
+    }
     cachedDict = domain->_domainDict;
     changedKeys = domain->_dirtyKeys;
     count = CFArrayGetCount(changedKeys);

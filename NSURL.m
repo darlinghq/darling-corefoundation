@@ -2504,6 +2504,15 @@ static void CFURLReturnError(CFErrorRef cfError, NSError **error)
     return CFURLResourceIsReachable([self _cfurl], (CFErrorRef *)error);
 }
 
+- (BOOL)getPromisedItemResourceValue:(out id *)value forKey:(NSURLResourceKey)key error:(out NSError **)error
+{
+    if (![self checkPromisedItemIsReachableAndReturnError:error])
+    {
+        return NO;
+    }
+    return [self getResourceValue:value forKey:key error:error];
+}
+
 - (NSDictionary *)promisedItemResourceValuesForKeys:(NSArray *)keys error:(NSError **)error
 {
     if (![self checkPromisedItemIsReachableAndReturnError:error])

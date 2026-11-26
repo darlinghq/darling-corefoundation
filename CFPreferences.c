@@ -240,6 +240,22 @@ static CFURLRef  _preferencesDirectoryForUserHost(CFStringRef  userName, CFStrin
 // negative zero, so those would change on the next read.
 static Boolean __CFPreferencesWritesXML = false;
 
+// While set, the process keeps preference changes in memory only (see _CFPrefsSetReadOnly).
+static _Atomic(Boolean) __CFPreferencesReadOnly = false;
+
+// QUIRK: while read-only, setting or removing a value still changes what this process reads back
+// and synchronizing still reports success, but nothing is written to disk, then or after
+// read-only is turned off; values set after turning it off are saved as usual. Not documented.
+// Evidence: black-box observation on macOS 26.7.3 (tier 2), checking with a second process and
+// `defaults read`. Test: tests/cfprefs-set-read-only.c.
+void _CFPrefsSetReadOnly(Boolean flag) {
+    __CFPreferencesReadOnly = flag;
+}
+
+CF_PRIVATE Boolean __CFPreferencesIsReadOnly(void) {
+    return __CFPreferencesReadOnly;
+}
+
 Boolean __CFPreferencesShouldWriteXML(void) {
     return __CFPreferencesWritesXML;
 }

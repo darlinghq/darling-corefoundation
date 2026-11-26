@@ -209,10 +209,14 @@ static CFStringRef _CFErrorCopyUserInfoKey(CFErrorRef err, CFStringRef key) {
     // First consult the userInfo dictionary   
     CFDictionaryRef userInfo = _CFErrorGetUserInfo(err);
     if (userInfo) result = (CFStringRef)CFDictionaryGetValue(userInfo, key);
-    // If that doesn't work, consult the callback
+    // If that doesn't work, consult the domain's value provider, as NSError's
+    // accessors do, then the callback
     if (result) {
         CFRetain(result);
     } else {
+        result = (CFStringRef)_CFErrorCopyValueFromProvider(err, key);
+    }
+    if (!result) {
         CFErrorUserInfoKeyCallBack callBack = CFErrorGetCallBackForDomain(CFErrorGetDomain(err));
         if (callBack) result = (CFStringRef)callBack(err, key);
     }
