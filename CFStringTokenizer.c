@@ -8,6 +8,7 @@
 #include "CFBase.h"
 #include "CFRuntime.h"
 #include "CFStringTokenizer.h"
+#include <stdint.h>
 #include <stdlib.h>
 #include <unicode/ubrk.h>
 #include <unicode/uchar.h>
@@ -44,13 +45,18 @@ static void __CFStringTokenizerDeallocate(CFTypeRef cf) {
     free(tokenizer->_text);
 }
 
-static UChar *__CFStringTokenizerCopyText(CFStringRef string, CFIndex len) {
-    UChar *text = malloc((len + 1) * sizeof(UChar));
+static Boolean __CFStringTokenizerIsValidRange(CFStringRef string, CFRange range) {
+    CFIndex len = CFStringGetLength(string);
+    return range.location >= 0 && range.length >= 0 && range.location <= len && range.length <= len - range.location;
+}
+
+static UChar *__CFStringTokenizerCopyText(CFStringRef string, CFRange range) {
+    UChar *text = malloc((range.length + 1) * sizeof(UChar));
     if (text == NULL) {
         return NULL;
     }
-    CFStringGetCharacters(string, CFRangeMake(0, len), (UniChar *)text);
-    text[len] = 0;
+    CFStringGetCharacters(string, range, (UniChar *)text);
+    text[range.length] = 0;
     return text;
 }
 
@@ -135,6 +141,10 @@ CFTypeID CFStringTokenizerGetTypeID(void) {
 #define BUFFER_SIZE 768
 
 CFStringTokenizerRef CFStringTokenizerCreate(CFAllocatorRef allocator, CFStringRef string, CFRange range, CFOptionFlags options, CFLocaleRef locale) {
+    if (string == NULL || !__CFStringTokenizerIsValidRange(string, range)) {
+        return NULL;
+    }
+
     CFIndex size = sizeof(struct __CFStringTokenizer) - sizeof(CFRuntimeBase);
     struct __CFStringTokenizer *tokenizer = (struct __CFStringTokenizer *)_CFRuntimeCreateInstance(allocator, CFStringTokenizerGetTypeID(), size, NULL);
     tokenizer->_string = CFStringCreateCopy(allocator, string);
@@ -147,7 +157,7 @@ CFStringTokenizerRef CFStringTokenizerCreate(CFAllocatorRef allocator, CFStringR
     }
 
 
-    CFStringRef localeName = locale ? CFLocaleGetIdentifier(locale) : CFSTR("");
+    CFStringRef localeName = CFLocaleGetIdentifier(tokenizer->_locale);
     char buffer[BUFFER_SIZE];
     const char *cstr = CFStringGetCStringPtr(localeName, kCFStringEncodingASCII);
     if (NULL == cstr) {
@@ -161,7 +171,7 @@ CFStringTokenizerRef CFStringTokenizerCreate(CFAllocatorRef allocator, CFStringR
         return NULL;
     }
 
-    UBreakIteratorType type;
+    UBreakIteratorType type = UBRK_CHARACTER;
     // UBRK_CHARACTER, UBRK_WORD, UBRK_LINE, UBRK_SENTENCE
     switch (options & TYPE_MASK) { // mask off the high bits since they can be options
         case kCFStringTokenizerUnitWord:
@@ -178,17 +188,16 @@ CFStringTokenizerRef CFStringTokenizerCreate(CFAllocatorRef allocator, CFStringR
             break;
     }
 
-    CFIndex len = CFStringGetLength(string);
-    tokenizer->_text = __CFStringTokenizerCopyText(string, len);
+    tokenizer->_text = __CFStringTokenizerCopyText(string, range);
     if (tokenizer->_text == NULL) {
         CFRelease(tokenizer);
         return NULL;
     }
     if ((options & TYPE_MASK) == kCFStringTokenizerUnitParagraph) {
-        tokenizer->_break_itr = __CFStringTokenizerOpenParagraphIterator(tokenizer->_text, len);
+        tokenizer->_break_itr = __CFStringTokenizerOpenParagraphIterator(tokenizer->_text, range.length);
     } else {
         UErrorCode err = U_ZERO_ERROR;
-        tokenizer->_break_itr = ubrk_open(type, cstr, tokenizer->_text, len, &err);
+        tokenizer->_break_itr = ubrk_open(type, cstr, tokenizer->_text, range.length, &err);
     }
 
     if (tokenizer->_break_itr == NULL) {
@@ -207,30 +216,48 @@ CFStringRef CFStringTokenizerCopyBestStringLanguage(CFStringRef string, CFRange 
 }
 
 void CFStringTokenizerSetString(CFStringTokenizerRef tokenizer, CFStringRef string, CFRange range) {
+    if (tokenizer == NULL || string == NULL || !__CFStringTokenizerIsValidRange(string, range)) {
+        return;
+    }
 
-#warning TODO: range is not handled currently
-
-    CFIndex len = CFStringGetLength(string);
-    UChar *text = __CFStringTokenizerCopyText(string, len);
+    UChar *text = __CFStringTokenizerCopyText(string, range);
     if (text == NULL) {
         return;
     }
     UErrorCode err = U_ZERO_ERROR;
-    ubrk_setText(tokenizer->_break_itr, text, len, &err);
+    ubrk_setText(tokenizer->_break_itr, text, range.length, &err);
     if (U_FAILURE(err)) {
         free(text);
         return;
     }
+
+    CFStringRef copy = CFStringCreateCopy(NULL, string);
+    if (copy == NULL) {
+        // Restore the previous text; the caller observes an unchanged tokenizer.
+        err = U_ZERO_ERROR;
+        ubrk_setText(tokenizer->_break_itr, tokenizer->_text, tokenizer->_range.length, &err);
+        free(text);
+        return;
+    }
+
+    CFRelease(tokenizer->_string);
+    tokenizer->_string = copy;
+    tokenizer->_range = range;
     free(tokenizer->_text);
     tokenizer->_text = text;
     __CFStringTokenizerInvalidateToken(tokenizer);
 }
 
 CFStringTokenizerTokenType CFStringTokenizerGoToTokenAtIndex(CFStringTokenizerRef tokenizer, CFIndex index) {
-    if (index < 0) {
+    if (index < tokenizer->_range.location) {
         return __CFStringTokenizerInvalidateToken(tokenizer);
     }
-    int32_t end = ubrk_following(tokenizer->_break_itr, index);
+    CFIndex localIndex = index - tokenizer->_range.location;
+    if (localIndex >= tokenizer->_range.length || localIndex > INT32_MAX) {
+        return __CFStringTokenizerInvalidateToken(tokenizer);
+    }
+
+    int32_t end = ubrk_following(tokenizer->_break_itr, (int32_t)localIndex);
     if (end == UBRK_DONE) {
         return __CFStringTokenizerInvalidateToken(tokenizer);
     }
@@ -245,7 +272,7 @@ CFStringTokenizerTokenType CFStringTokenizerGoToTokenAtIndex(CFStringTokenizerRe
         return __CFStringTokenizerInvalidateToken(tokenizer);
     }
 
-    tokenizer->_token = CFRangeMake(start, end - start);
+    tokenizer->_token = CFRangeMake(tokenizer->_range.location + start, end - start);
     return type;
 }
 
@@ -259,7 +286,7 @@ CFStringTokenizerTokenType CFStringTokenizerAdvanceToNextToken(CFStringTokenizer
 
         CFStringTokenizerTokenType type = __CFStringTokenizerSegmentType(tokenizer, ubrk_getRuleStatus(tokenizer->_break_itr), start, end);
         if (type != kCFStringTokenizerTokenNone) {
-            tokenizer->_token = CFRangeMake(start, end - start);
+            tokenizer->_token = CFRangeMake(tokenizer->_range.location + start, end - start);
             return type;
         }
     }

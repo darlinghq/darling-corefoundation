@@ -355,24 +355,13 @@ static void NSTimeZoneCacheAdd(NSString *name, NSTimeZone *tz)
 
 - (NSString *)abbreviationForDate:(NSDate *)aDate
 {
-    //This implementation is more correct than calling CFTimeZoneCopyAbbreviation from this point.
-    //TODO - account for daylight savings by using ICU
-    const void *keys[48];
-    const void *values[48];
-    CFDictionaryGetKeysAndValues((CFDictionaryRef)[NSTimeZone abbreviationDictionary], keys, values);
-    
-    for (int i = 0; i < 48; i++)
+    if (aDate == nil)
     {
-        if ([((NSString*)values[i]) isEqualToString:[self name]])
-        {
-            return keys[i];
-        }
+        return nil;
     }
-    
-    return nil;
 
-    //This date is not the date that is sourced for the timezone, but used for determining the current daylight savings status
-    //return [(NSString *)CFTimeZoneCopyAbbreviation((CFTimeZoneRef)self, [aDate timeIntervalSinceReferenceDate]) autorelease];
+    CFStringRef abbreviation = CFTimeZoneCopyAbbreviation((CFTimeZoneRef)self, [aDate timeIntervalSinceReferenceDate]);
+    return [(NSString *)abbreviation autorelease];
 }
 
 - (NSString *)description

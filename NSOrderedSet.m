@@ -2209,20 +2209,57 @@
 
 - (void)removeObjectsWithOptions:(NSEnumerationOptions)options passingTest:(BOOL (^)(id obj, NSUInteger idx, BOOL *stop))test
 {
-#warning TODO
-    DEBUG_BREAK();
-}
-
-- (void)removeObjectsAtIndexes:(NSIndexSet *)indexes options:(NSEnumerationOptions)options passingTest:(BOOL (^)(id obj, NSUInteger idx, BOOL *stop))test
-{
     if (test == nil)
     {
         [NSException raise:NSInvalidArgumentException format:@"Test block cannot be nil"];
         return;
     }
 
-#warning TODO
-    DEBUG_BREAK();
+    NSUInteger count = [self count];
+    if (count == 0)
+    {
+        return;
+    }
+
+    NSMutableIndexSet *indexesToRemove = [[objc_getClass("NSMutableIndexSet") alloc] init];
+    [self enumerateObjectsWithOptions:options usingBlock:^(id obj, NSUInteger idx, BOOL *stop) {
+        if (test(obj, idx, stop))
+        {
+            [indexesToRemove addIndex:idx];
+        }
+    }];
+
+    [self removeObjectsAtIndexes:indexesToRemove];
+    [indexesToRemove release];
+}
+
+- (void)removeObjectsAtIndexes:(NSIndexSet *)indexes options:(NSEnumerationOptions)options passingTest:(BOOL (^)(id obj, NSUInteger idx, BOOL *stop))test
+{
+    if (indexes == nil)
+    {
+        [NSException raise:NSInvalidArgumentException format:@"Index set cannot be nil"];
+        return;
+    }
+    if (test == nil)
+    {
+        [NSException raise:NSInvalidArgumentException format:@"Test block cannot be nil"];
+        return;
+    }
+    if ([indexes count] == 0)
+    {
+        return;
+    }
+
+    NSMutableIndexSet *indexesToRemove = [[objc_getClass("NSMutableIndexSet") alloc] init];
+    [indexes enumerateIndexesWithOptions:options usingBlock:^(NSUInteger idx, BOOL *stop) {
+        if (test([self objectAtIndex:idx], idx, stop))
+        {
+            [indexesToRemove addIndex:idx];
+        }
+    }];
+
+    [self removeObjectsAtIndexes:indexesToRemove];
+    [indexesToRemove release];
 }
 
 - (void)intersectOrderedSet:(NSOrderedSet *)orderedSet
