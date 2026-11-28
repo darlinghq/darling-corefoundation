@@ -23,11 +23,46 @@ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
 #include <CoreFoundation/CFNumber.h>
 #include <CoreFoundation/CFArray.h>
 #include <CoreFoundation/CFData.h>
-#include <CoreFoundation/CFNumber.h>
+#include <CoreFoundation/CFDate.h>
+#include <CoreFoundation/CFUUID.h>
 
 #include <xpc/xpc.h>
 
+// XPC dates are nanoseconds from the Unix epoch; CFDate uses seconds from the Core Foundation epoch.
+static CFDateRef CFXPCDateCreateCFDate(int64_t nanoseconds) {
+	CFTimeInterval seconds = ((CFTimeInterval)nanoseconds / 1000000000.0) - kCFAbsoluteTimeIntervalSince1970;
+	return CFDateCreate(NULL, seconds);
+}
+
+static xpc_object_t CFXPCDateCreateXPCDate(CFDateRef date) {
+	CFTimeInterval seconds = CFDateGetAbsoluteTime(date) + kCFAbsoluteTimeIntervalSince1970;
+	return xpc_date_create((int64_t)(seconds * 1000000000.0));
+}
+
+static CFUUIDRef CFXPCUUIDCreateCFUUID(const uint8_t *bytes) {
+	CFUUIDBytes uuidBytes = {
+		bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+		bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+	};
+	return CFUUIDCreateFromUUIDBytes(NULL, uuidBytes);
+}
+
+static xpc_object_t CFXPCUUIDCreateXPCUUID(CFUUIDRef uuid) {
+	CFUUIDBytes uuidBytes = CFUUIDGetUUIDBytes(uuid);
+	const uint8_t bytes[16] = {
+		uuidBytes.byte0, uuidBytes.byte1, uuidBytes.byte2, uuidBytes.byte3,
+		uuidBytes.byte4, uuidBytes.byte5, uuidBytes.byte6, uuidBytes.byte7,
+		uuidBytes.byte8, uuidBytes.byte9, uuidBytes.byte10, uuidBytes.byte11,
+		uuidBytes.byte12, uuidBytes.byte13, uuidBytes.byte14, uuidBytes.byte15
+	};
+	return xpc_uuid_create(bytes);
+}
+
 CFTypeRef _CFXPCCreateCFObjectFromXPCObject(xpc_object_t xo) {
+	if (xo == NULL) {
+		return NULL;
+	}
+
 	xpc_type_t type = xpc_get_type(xo);
 
 	if (type == XPC_TYPE_DICTIONARY) {
@@ -101,7 +136,18 @@ CFTypeRef _CFXPCCreateCFObjectFromXPCObject(xpc_object_t xo) {
 		return CFRetain(kCFNull);
 	}
 
-	// TODO: double, date, and uuid
+	if (type == XPC_TYPE_DOUBLE) {
+		double val = xpc_double_get_value(xo);
+		return CFNumberCreate(NULL, kCFNumberDoubleType, &val);
+	}
+
+	if (type == XPC_TYPE_DATE) {
+		return CFXPCDateCreateCFDate(xpc_date_get_value(xo));
+	}
+
+	if (type == XPC_TYPE_UUID) {
+		return CFXPCUUIDCreateCFUUID(xpc_uuid_get_bytes(xo));
+	}
 
 	return NULL;
 };
@@ -136,6 +182,10 @@ static void CFXPCDictionaryApplier(const void* raw_key, const void* raw_value, v
 };
 
 xpc_object_t _CFXPCCreateXPCObjectFromCFObject(CFTypeRef attrs) {
+	if (attrs == NULL) {
+		return NULL;
+	}
+
 	CFTypeID id = CFGetTypeID(attrs);
 
 	if (id == CFStringGetTypeID()) {
@@ -209,9 +259,24 @@ xpc_object_t _CFXPCCreateXPCObjectFromCFObject(CFTypeRef attrs) {
 
 	if (id == CFNumberGetTypeID()) {
 		CFNumberRef num = attrs;
+		if (CFNumberIsFloatType(num)) {
+			double tmp = 0;
+			CFNumberGetValue(num, kCFNumberDoubleType, &tmp);
+			return xpc_double_create(tmp);
+		}
 		int64_t tmp = 0;
-		CFNumberGetValue(num, kCFNumberSInt64Type, &tmp);
+		if (!CFNumberGetValue(num, kCFNumberSInt64Type, &tmp)) {
+			return NULL;
+		}
 		return xpc_int64_create(tmp);
+	}
+
+	if (id == CFDateGetTypeID()) {
+		return CFXPCDateCreateXPCDate(attrs);
+	}
+
+	if (id == CFUUIDGetTypeID()) {
+		return CFXPCUUIDCreateXPCUUID(attrs);
 	}
 
 	if (id == CFNullGetTypeID()) {
